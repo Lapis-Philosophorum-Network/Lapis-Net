@@ -28,6 +28,7 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-storage` — storage/DHT (later: Nabu)
 * `lapis-net-trust` — Veritas web-of-trust (later: signed trust-edge model, shortest-path algorithm)
 * `lapis-net-networking` — libp2p node bootstrap and GossipSub (later waves)
+* `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness
 
 == Diagrams

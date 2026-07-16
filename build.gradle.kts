@@ -20,11 +20,11 @@ subprojects {
     apply(plugin = "org.jlleitschuh.gradle.ktlint")
 
     dependencies {
-        "implementation"(rootProject.libs.kotlin.logging)
-        "implementation"(rootProject.libs.slf4j.api)
+        add("implementation", rootProject.libs.kotlin.logging)
+        add("implementation", rootProject.libs.slf4j.api)
 
-        "testImplementation"(rootProject.libs.kotest.runner.junit5)
-        "testImplementation"(rootProject.libs.kotest.assertions.core)
+        add("testImplementation", rootProject.libs.kotest.runner.junit5)
+        add("testImplementation", rootProject.libs.kotest.assertions.core)
     }
 
     tasks.withType<KotlinCompile>().configureEach {

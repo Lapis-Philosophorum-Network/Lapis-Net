@@ -42,7 +42,7 @@ yet.
 | libp2p node bootstrap and GossipSub propagation (land in later waves).
 
 | `lapis-net-test`
-| Shared test fixtures and helpers used by other modules' test sources.
+| Shared test fixtures and helpers. Not yet consumed by other modules' test sources — lands once V0.1.8's multi-node harness needs it.
 
 | `lapis-net-cli`
 | Entry point / demo harness (multi-node demo lands in V0.1.8).
