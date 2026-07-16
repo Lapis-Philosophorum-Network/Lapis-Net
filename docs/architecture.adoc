@@ -1,0 +1,40 @@
+= Lapis Net Architecture
+
+== Status
+
+V0.1.1: skeleton only. This document grows as modules gain real implementations.
+
+== Layering
+
+Lapis Net separates a mandatory protocol core from an optional scoring
+substrate and a fully pluggable application layer:
+
+* *Protocol core* (mandatory for every participant): identity (secp256k1),
+  content addressing, storage (Nabu/Bitswap), peer discovery (DHT),
+  propagation (GossipSub), Lightning payments.
+* *Scoring substrate* (optional): Veritas, Karma, Madli as network-wide
+  reputation records in the DHT; Virtus/LTR as view-specific records bound to
+  a browser vendor.
+* *Application layer* (freely swappable per vendor): browser/view
+  implementations, sorting, scoring interpretation, UI, ad policy.
+
+The network functions even with zero scoring systems in use — Veritas,
+Virtus, Karma, and Madli are tools for views, not a protocol requirement.
+
+== Module map (V0.1.1)
+
+* `lapis-net-core` — shared abstractions
+* `lapis-net-identity` — identity (secp256k1 keypair, later Ed25519 dual-key binding for libp2p peer IDs)
+* `lapis-net-storage` — storage/DHT (later: Nabu)
+* `lapis-net-trust` — Veritas web-of-trust (later: signed trust-edge model, shortest-path algorithm)
+* `lapis-net-networking` — libp2p node bootstrap and GossipSub (later waves)
+* `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
+* `lapis-net-cli` — entry point / demo harness
+
+== Diagrams
+
+Diagrams for this repository are authored in kUML and embedded via the
+`[kuml]` Asciidoctor macro once the `kuml-asciidoc` extension is wired into
+the build (not yet done in V0.1.1 — no rendering pipeline exists in this
+wave). No diagrams are embedded here yet; the module map above is prose-only
+until that wiring lands.

@@ -1,0 +1,26 @@
+= Contributing to Lapis Net
+
+== Getting started
+
+[source,bash]
+----
+git clone https://github.com/Lapis-Philosophorum-Network/Lapis-Net.git
+cd Lapis-Net
+./gradlew clean check
+----
+
+== Code standards
+
+* Kotlin/JVM, JDK 21 toolchain.
+* Style enforced by ktlint — run `./gradlew ktlintFormat` to auto-fix, `./gradlew clean check` to verify.
+* Logging via kotlin-logging: `private val logger = KotlinLogging.logger {}` per file that logs. Do not add a
+  concrete SLF4J backend (e.g. logback) to library modules — only `lapis-net-cli` ships one.
+* Write a test for new code (Kotest, `FunSpec` style is the current convention).
+* All class/interface/package names in English (Veritas/Karma/Virtus/Madli are the documented exception).
+* Documentation in AsciiDoc, English only. Diagrams in kUML via the `[kuml]` macro — no PlantUML/Mermaid/ASCII-art.
+
+== Pull requests
+
+1. Ensure `./gradlew clean check` passes locally.
+2. Describe what changed and why.
+3. Keep the change scoped — this repo develops in small, reviewable waves.
