@@ -5,6 +5,8 @@ slf4j = "2.0.18"
 kotlin-logging = "8.0.4"
 kotest = "6.2.2"
 logback = "1.5.38"
+secp256k1-kmp = "0.23.0"
+bouncycastle = "1.85"
 
 [libraries]
 kotlin-logging = { group = "io.github.oshai", name = "kotlin-logging-jvm", version.ref = "kotlin-logging" }
@@ -12,6 +14,9 @@ slf4j-api = { group = "org.slf4j", name = "slf4j-api", version.ref = "slf4j" }
 logback-classic = { group = "ch.qos.logback", name = "logback-classic", version.ref = "logback" }
 kotest-runner-junit5 = { group = "io.kotest", name = "kotest-runner-junit5-jvm", version.ref = "kotest" }
 kotest-assertions-core = { group = "io.kotest", name = "kotest-assertions-core-jvm", version.ref = "kotest" }
+secp256k1-kmp = { group = "fr.acinq.secp256k1", name = "secp256k1-kmp", version.ref = "secp256k1-kmp" }
+secp256k1-kmp-jni-jvm = { group = "fr.acinq.secp256k1", name = "secp256k1-kmp-jni-jvm", version.ref = "secp256k1-kmp" }
+bouncycastle-provider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
