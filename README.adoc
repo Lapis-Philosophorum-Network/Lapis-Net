@@ -1,5 +1,7 @@
 = Lapis Net
 
+image::docs/images/ln-banner.png[Lapis Net,link=https://github.com/Lapis-Philosophorum-Network/Lapis-Net]
+
 Lapis Net is a fully decentralized peer-to-peer social network protocol on the
 Kotlin/JVM platform. It is part of the Lapis Philosophorum family of
 distributed systems, alongside https://github.com/Lapis-Philosophorum-Network[Lapis Cloud].
