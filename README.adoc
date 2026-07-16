@@ -71,7 +71,7 @@ See link:docs/architecture.adoc[docs/architecture.adoc] and link:docs/roadmap.ad
 
 == License
 
-TBD — not yet decided. All rights reserved until a license is chosen.
+Apache License 2.0 — see link:LICENSE[LICENSE].
 
 == Contributing
 
