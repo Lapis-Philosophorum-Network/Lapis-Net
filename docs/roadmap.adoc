@@ -1,0 +1,38 @@
+= Lapis Net V0.1 Roadmap
+
+Target: first runnable prototype — network bootstrap plus Veritas (the first
+of the four scoring dimensions), including GossipSub propagation of trust
+edges between local nodes.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.1.1
+| Gradle multi-module skeleton + CI/CD skeleton (this wave).
+
+| V0.1.2
+| Identity layer: secp256k1 keypair generation/persistence, dual-key binding to Ed25519 for the libp2p peer ID.
+
+| V0.1.3
+| P2P node bootstrap: jvm-libp2p setup, bootstrap peers, local mDNS discovery.
+
+| V0.1.4
+| Nabu integration: DHT + Bitswap for content storage (Veritas records as signed files).
+
+| V0.1.5
+| Veritas core: trust-edge data model, signing, Git-like versioning (backward hash to the previous grant).
+
+| V0.1.6
+| Veritas path algorithm: shortest paths, lexicographic ordering by next hop, product of edge weights.
+
+| V0.1.7
+| GossipSub propagation: distribute Veritas records over a dedicated topic and persist them in Nabu.
+
+| V0.1.8
+| Minimal CLI / test harness: demo with N local nodes, trust-edge issuance and propagation made visible.
+|===
+
+After V0.1: content publishing via `LtrRecord` (on-chain first, for easier
+testing), then a pilot with a small group (PdV, Girchi, libertarian
+scene) — see V0.2 planning once V0.1 is complete.

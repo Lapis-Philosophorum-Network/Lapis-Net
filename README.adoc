@@ -1,0 +1,76 @@
+= Lapis Net
+
+Lapis Net is a fully decentralized peer-to-peer social network protocol on the
+Kotlin/JVM platform. It is part of the Lapis Philosophorum family of
+distributed systems, alongside https://github.com/Lapis-Philosophorum-Network[Lapis Cloud].
+
+The protocol combines:
+
+* Decentralized identity — secp256k1 keypairs, Bitcoin-compatible
+* Content-addressed storage — Nabu (IPFS-on-libp2p), DHT + Bitswap
+* Web-of-trust reputation — Veritas, a shortest-path trust graph
+* Gossip-based propagation — libp2p GossipSub
+
+The protocol core is deliberately neutral about curation, sorting, and
+reputation models. Veritas, Karma, Virtus, and Madli (the scoring dimensions)
+are optional tools for browser/view implementations, not protocol
+requirements.
+
+This repository is in early development. This is the *V0.1.1 skeleton*: a
+multi-module Gradle project structure and CI pipeline, with no protocol logic
+yet.
+
+== Modules
+
+[cols="1,3"]
+|===
+| Module | Purpose
+
+| `lapis-net-core`
+| Base protocol abstractions shared by all other modules.
+
+| `lapis-net-identity`
+| Keypair / peer-identity abstractions (secp256k1 dual-key binding lands in a later wave).
+
+| `lapis-net-storage`
+| DHT / content-storage abstractions (Nabu integration lands in a later wave).
+
+| `lapis-net-trust`
+| Veritas (web-of-trust) data model and scoring (trust-edge model and shortest-path algorithm land in later waves).
+
+| `lapis-net-networking`
+| libp2p node bootstrap and GossipSub propagation (land in later waves).
+
+| `lapis-net-test`
+| Shared test fixtures and helpers used by other modules' test sources.
+
+| `lapis-net-cli`
+| Entry point / demo harness (multi-node demo lands in V0.1.8).
+|===
+
+== Building
+
+[source,bash]
+----
+./gradlew clean check   # compiles, runs tests, runs ktlint
+./gradlew :lapis-net-cli:run
+----
+
+Requires JDK 21.
+
+== Development conventions
+
+* Code style is enforced by https://github.com/JLLeitschuh/ktlint-gradle[ktlint] and checked in CI.
+* Logging uses https://github.com/oshai/kotlin-logging[kotlin-logging]: `private val logger = KotlinLogging.logger {}` in every file that logs.
+* Documentation is written in AsciiDoc; diagrams (once introduced) use kUML via the `kuml` Asciidoctor macro — no PlantUML, Mermaid, or hand-drawn diagrams.
+* All identifiers (classes, interfaces, packages) are named in English. Domain terms (Veritas, Karma, Virtus, Madli) are the one exception, as they are Latin proper nouns used directly as identifiers.
+
+See link:docs/architecture.adoc[docs/architecture.adoc] and link:docs/roadmap.adoc[docs/roadmap.adoc] for more.
+
+== License
+
+TBD — not yet decided. All rights reserved until a license is chosen.
+
+== Contributing
+
+See link:CONTRIBUTING.adoc[CONTRIBUTING.adoc].
