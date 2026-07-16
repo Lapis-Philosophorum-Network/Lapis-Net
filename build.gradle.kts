@@ -12,6 +12,25 @@ allprojects {
 
     repositories {
         mavenCentral()
+        // jvm-libp2p (lapis-net-networking) is not published to Maven Central - declared here,
+        // not just in that module's own build.gradle.kts, because it's exposed as an `api`
+        // dependency: any module compiling against lapis-net-networking (e.g. lapis-net-cli)
+        // needs to resolve it too. See https://github.com/libp2p/jvm-libp2p ("Adding as a
+        // dependency") for the up-to-date list of mirrors - all three are required, not just
+        // the first: jvm-libp2p's own transitive dependencies (java-multibase, noise-java) are
+        // split across JitPack and the Consensys artifact server.
+        // Each is scoped to only the group(s) it actually needs to serve, so a future dependency
+        // added anywhere in this build can't silently resolve through - and get build-on-demand
+        // compiled from an arbitrary GitHub repo by - JitPack in particular.
+        maven("https://dl.cloudsmith.io/public/libp2p/jvm-libp2p/maven/") {
+            content { includeGroup("io.libp2p") }
+        }
+        maven("https://jitpack.io") {
+            content { includeGroup("com.github.multiformats") }
+        }
+        maven("https://artifacts.consensys.net/public/maven/maven/") {
+            content { includeGroup("tech.pegasys") }
+        }
     }
 }
 
