@@ -16,9 +16,11 @@ reputation models. Veritas, Karma, Virtus, and Madli (the scoring dimensions)
 are optional tools for browser/view implementations, not protocol
 requirements.
 
-This repository is in early development. This is the *V0.1.1 skeleton*: a
-multi-module Gradle project structure and CI pipeline, with no protocol logic
-yet.
+This repository is in early development. As of *V0.1.2*, the identity layer
+(secp256k1 keypairs, dual-key binding to Ed25519 for the future libp2p peer
+ID, local persistence) is implemented — see
+link:docs/architecture.adoc#_identity_v0_1_2[docs/architecture.adoc]. The
+remaining modules are still skeletons.
 
 == Modules
 
@@ -30,7 +32,7 @@ yet.
 | Base protocol abstractions shared by all other modules.
 
 | `lapis-net-identity`
-| Keypair / peer-identity abstractions (secp256k1 dual-key binding lands in a later wave).
+| secp256k1 identity keypairs, Ed25519 dual-key binding for the future libp2p peer ID, and local keystore persistence.
 
 | `lapis-net-storage`
 | DHT / content-storage abstractions (Nabu integration lands in a later wave).

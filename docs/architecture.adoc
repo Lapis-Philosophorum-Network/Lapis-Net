@@ -2,7 +2,8 @@
 
 == Status
 
-V0.1.1: skeleton only. This document grows as modules gain real implementations.
+V0.1.2: identity layer implemented (see below). Remaining modules are still
+skeletons. This document grows as modules gain real implementations.
 
 == Layering
 
@@ -21,15 +22,45 @@ substrate and a fully pluggable application layer:
 The network functions even with zero scoring systems in use — Veritas,
 Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 
-== Module map (V0.1.1)
+== Module map
 
-* `lapis-net-core` — shared abstractions
-* `lapis-net-identity` — identity (secp256k1 keypair, later Ed25519 dual-key binding for libp2p peer IDs)
+* `lapis-net-core` — shared abstractions, including the `crypto` package's domain-separated
+  digest and public-fingerprint helpers used by all signing code in the project
+* `lapis-net-identity` — identity (implemented in V0.1.2, see below)
 * `lapis-net-storage` — storage/DHT (later: Nabu)
 * `lapis-net-trust` — Veritas web-of-trust (later: signed trust-edge model, shortest-path algorithm)
 * `lapis-net-networking` — libp2p node bootstrap and GossipSub (later waves)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness
+
+== Identity (V0.1.2)
+
+The canonical Lapis Net identity is a **secp256k1 keypair** (`secp256k1-kmp`) — the same key type
+that would back a Bitcoin wallet or Lightning channel in a later wave. There is no recovery
+mechanism: losing the private key means losing the identity permanently, by design, analogous to
+Bitcoin.
+
+libp2p (from V0.1.3) natively wants an **Ed25519** keypair for its peer ID. Since secp256k1 is the
+real identity, each identity carries a second, Ed25519 keypair (Bouncy Castle,
+`bcprov-jdk18on` — the same library jvm-libp2p itself depends on) used only for the libp2p peer
+ID, plus a **dual-key binding**: the secp256k1 key signs a domain-separated digest of the Ed25519
+public key, cryptographically proving "this libp2p peer ID belongs to this Lapis Net identity"
+without making Ed25519 the canonical identity.
+
+Domain separation (`net.lapisphilosophorum.lapisnet.core.crypto.domainSeparatedDigest`) is a
+project-wide convention, not specific to identity binding: every distinct purpose that signs a
+32-byte digest with a secp256k1 key (identity binding today; Veritas trust-edge grants from
+V0.1.5) must use its own versioned ASCII tag, so a signature produced for one purpose can never be
+confused with a signature for another purpose using the same key.
+
+Identities persist to a fixed-layout binary keystore file (`KeystoreFileFormat`, one file per
+label under `$LAPISNET_HOME/identity` or `~/.lapisnet/identity`), protected only by POSIX file
+permissions (`0600` files, `0700` directory) — the same trust model `ssh-keygen` uses by default.
+This is a deliberate, temporary tradeoff for an early prototype: passphrase-derived encryption at
+rest is a documented follow-up that should land before this key custodies real funds (Lightning).
+A user may hold several identities (pseudonyms) side by side, addressed by label — device-sync /
+self-trust linking between a user's own pseudonyms is a later wave (see the project's Veritas
+notes), not implemented here.
 
 == Diagrams
 
