@@ -25,8 +25,18 @@ allprojects {
         maven("https://dl.cloudsmith.io/public/libp2p/jvm-libp2p/maven/") {
             content { includeGroup("io.libp2p") }
         }
+        // com.github.peergos: Nabu (DHT + Bitswap, lapis-net-storage) and its own forked
+        // jvm-libp2p (excluded - see lapis-net-storage/build.gradle.kts for why).
+        // com.github.ipld: java-cid, transitive via java-multiaddr, used directly in Nabu's
+        // public API (Cid). com.github.dnsjava: Nabu pins this JitPack-mirrored coordinate
+        // rather than the native dnsjava:dnsjava Maven Central artifact.
         maven("https://jitpack.io") {
-            content { includeGroup("com.github.multiformats") }
+            content {
+                includeGroup("com.github.multiformats")
+                includeGroup("com.github.peergos")
+                includeGroup("com.github.ipld")
+                includeGroup("com.github.dnsjava")
+            }
         }
         maven("https://artifacts.consensys.net/public/maven/maven/") {
             content { includeGroup("tech.pegasys") }

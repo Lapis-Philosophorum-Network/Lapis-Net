@@ -2,9 +2,10 @@
 
 == Status
 
-V0.1.3: identity layer (V0.1.2) and P2P node bootstrap (V0.1.3, see below) are
-implemented. Remaining modules are still skeletons. This document grows as
-modules gain real implementations.
+V0.1.4: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), and DHT + Bitswap
+content storage via Nabu (V0.1.4, see below) are implemented. Remaining
+modules are still skeletons. This document grows as modules gain real
+implementations.
 
 == Layering
 
@@ -28,7 +29,7 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-core` — shared abstractions, including the `crypto` package's domain-separated
   digest and public-fingerprint helpers used by all signing code in the project
 * `lapis-net-identity` — identity (implemented in V0.1.2, see below)
-* `lapis-net-storage` — storage/DHT (later: Nabu)
+* `lapis-net-storage` — storage/DHT (Nabu, implemented in V0.1.4, see below)
 * `lapis-net-trust` — Veritas web-of-trust (later: signed trust-edge model, shortest-path algorithm)
 * `lapis-net-networking` — libp2p node bootstrap (implemented in V0.1.3, see below) and GossipSub (later wave)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
@@ -85,8 +86,69 @@ jvm-libp2p is not published to Maven Central; it ships across three mirrors (Clo
 Consensys artifacts) that must all be declared as repositories, since its own transitive
 dependencies (`java-multibase`, `noise-java`) are split across them.
 
-GossipSub pub/sub, Nabu/DHT storage, and NAT traversal are explicitly out of scope for this wave
-and land in later ones (V0.1.7, V0.1.4, and an open research item, respectively).
+GossipSub pub/sub and NAT traversal are explicitly out of scope for this wave and land in later
+ones (V0.1.7 and an open research item, respectively).
+
+== Storage (V0.1.4)
+
+`NabuStorage` (in `lapis-net-storage`) layers Nabu's DHT (Kademlia) and Bitswap protocols onto
+the same `Host` a `LapisNode` already built and started in V0.1.3 (`LapisNode.host` is exposed,
+read-only, specifically for this). Its API is domain-agnostic by design — `ByteArray`/`Cid` in
+and out — so it can serve as the storage substrate for signed Veritas records (V0.1.5+) without
+knowing anything about Veritas itself.
+
+**Classpath collision with Nabu's own forked jvm-libp2p.** Nabu's `pom.xml` pins a transitive
+dependency on `com.github.peergos:jvm-libp2p:0.18.0-ipv6-mdns-wildcard`, a Peergos-maintained fork
+of the official `io.libp2p:jvm-libp2p` this project already depends on. The fork ships identical
+Java package names (`io.libp2p.core.*`) but different bytecode for 361 of 829 shared classes
+(verified by decompiling both jars). `lapis-net-storage/build.gradle.kts` excludes the fork and
+forces Nabu to resolve against the official artifact instead — verified safe because Nabu's
+`Bitswap`/`Kademlia` classes (and their engines) have zero compiled references to the
+`io.libp2p.core.dsl.*` builder classes that actually differ between the two jars (only Nabu's own
+unused `org.peergos.HostBuilder` touches those), confirmed both statically and by a real two-node
+Bitswap put/get spike against the official jar. `NabuStorage` therefore always attaches to a
+`Host` built via the official DSL (`LapisNode.create()`), never via Nabu's own `HostBuilder` or
+`EmbeddedIpfs`.
+
+**Access control: none yet, by design.** `NabuStorage.attach()` wires an always-allow
+`BlockRequestAuthoriser` — any connected peer can fetch any block this node has stored, provided
+or not, the standard Bitswap/IPFS trust model (CIDs are unguessable 256-bit content hashes; a peer
+cannot induce this node to fetch-and-forward third-party content, since `get()`/`findProviders()`
+are only called by this project's own local code, never in response to a remote request).
+Per-caller/per-record access control is a Veritas-layer concern and lands in V0.1.5+, not here.
+
+**DHT record-store bound.** Nabu's own `RamRecordStore` (used for IPNS-style key/value records)
+is an uncapped `HashMap`, and its `KademliaEngine` hands any connected peer's signed `PUT_VALUE`
+record straight into it with no other rate limit - reachable simply by wiring up Kademlia at all,
+regardless of whether this project's own API ever publishes an IPNS record itself.
+`lapis-net-storage`'s own `BoundedRecordStore` (LRU-capped, mirroring Nabu's own
+`RamProviderStore`) is used instead to prevent unbounded remote-triggered heap growth.
+
+**Known limitation: cross-node DHT provider discovery does not currently work.**
+`NabuStorage.provide()`/`findProviders()` wrap Nabu's real `Kademlia.provideBlock`/
+`findProviders` API correctly (verified via `javap` against the real jar), and the underlying
+DHT routing-table bootstrap (`connectToDhtPeer`, wrapping `Kademlia.bootstrapRoutingTable`) is
+verified working — a 3-node loopback chain reliably populates each node's routing table with its
+explicitly-connected peer. However, the actual provider announcement/discovery round trip does
+not: a standalone diagnostic spike (four isolated runs, outside the test suite, against real
+loopback nodes) found that a `GET_PROVIDERS` RPC returns an empty provider list even via Nabu's
+own trivial "I already have this block locally" auto-provide path in
+`KademliaEngine.receiveRequest`'s `GET_PROVIDERS` case — i.e. this reproduces with zero
+involvement of `provide()`/`ADD_PROVIDER` at all, so the fault is in the RPC/dial mechanism
+`Kademlia` uses for both message types (`Kademlia.dialPeer`), not specific to provider
+announcement. The failure is reproducible, not flaky (unlike V0.1.3's mDNS multicast issue,
+which has a genuine external cause) — root cause not identified within this wave's practical
+debugging budget; suspected candidates include an interaction between `/ipfs/` vs. `/p2p/`
+peer-id multiaddr component naming (routing-table entries carry `/ipfs/`-form addresses) and
+`dial()`'s peer-id validation, or a Nabu v0.8.0-specific issue. `lapis-net-storage`'s test suite
+pins this with an explicit "KNOWN ISSUE" test
+(`MultiNodeDhtProviderDiscoveryTest`) asserting the current (broken) empty result, so a future
+fix shows up as a test failure prompting an update, rather than the regression going unnoticed.
+What remains fully verified and usable for V0.1.5+: local put/get, and Bitswap fetch given an
+explicit peer (the `TwoNodeBitswapDirectFetchTest` path) — i.e. `get(cid, peers = ...)` with a
+peer set obtained by some other means (a future wave's own peer-list, GossipSub-announced peers,
+etc.) is safe to build on; relying on `findProviders()` to return non-empty is not, until this is
+root-caused.
 
 == Diagrams
 

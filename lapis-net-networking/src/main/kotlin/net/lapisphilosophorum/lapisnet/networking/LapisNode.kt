@@ -44,9 +44,14 @@ class LapisNodeException(
  * Bootstrap peers are the opposite case: dialing them is the whole point of [start], so it does,
  * but non-blockingly and non-fatally - an unreachable placeholder bootstrap peer must never
  * block or fail node startup.
+ *
+ * [host] is exposed (read-only) so other modules that need to attach additional libp2p protocol
+ * handlers to this same swarm - e.g. `lapis-net-storage`'s `NabuStorage.attach` - can do so
+ * without this class growing a dependency on every protocol layered on top of it. Callers must
+ * still go through [start]/[stop] for lifecycle, never call [Host.start]/[Host.stop] directly.
  */
 class LapisNode private constructor(
-    private val host: Host,
+    val host: Host,
     private val mdns: MDnsDiscovery,
 ) {
     private val discovered = BoundedPeerCache(MAX_DISCOVERED_PEERS)
