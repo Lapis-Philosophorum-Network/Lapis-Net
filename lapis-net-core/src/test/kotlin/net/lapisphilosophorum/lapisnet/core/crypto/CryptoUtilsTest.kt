@@ -22,6 +22,15 @@ class CryptoUtilsTest :
                 domainSeparatedDigest("tag", "two".toByteArray())
         }
 
+        test("domainSeparatedDigest does not let part boundaries shift without changing the digest") {
+            val shiftedLeft = domainSeparatedDigest("tag", "AB".toByteArray(), "CD".toByteArray())
+            val shiftedRight = domainSeparatedDigest("tag", "A".toByteArray(), "BCD".toByteArray())
+            val concatenated = domainSeparatedDigest("tag", "ABCD".toByteArray())
+            shiftedLeft.contentEquals(shiftedRight) shouldBe false
+            shiftedLeft.contentEquals(concatenated) shouldBe false
+            shiftedRight.contentEquals(concatenated) shouldBe false
+        }
+
         test("domainSeparatedDigest rejects an empty domain tag") {
             io.kotest.assertions.throwables.shouldThrow<IllegalArgumentException> {
                 domainSeparatedDigest("", "payload".toByteArray())

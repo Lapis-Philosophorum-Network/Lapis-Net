@@ -72,6 +72,20 @@ class FileIdentityRepositoryTest :
             }
         }
 
+        test("rejects labels that could escape the identity directory") {
+            val repository = FileIdentityRepository(tempDir.resolve("identity"))
+            val identity = DualKeyIdentity.generate()
+
+            listOf("../escape", "a/b", "/etc/passwd", "..", "").forEach { label ->
+                io.kotest.assertions.throwables.shouldThrow<IllegalArgumentException> {
+                    repository.save(identity, label)
+                }
+                io.kotest.assertions.throwables.shouldThrow<IllegalArgumentException> {
+                    repository.load(label)
+                }
+            }
+        }
+
         test("list returns a handle per saved label without exposing private key material") {
             val repository = FileIdentityRepository(tempDir.resolve("identity"))
             val alice = repository.generateAndSave(label = "alice")

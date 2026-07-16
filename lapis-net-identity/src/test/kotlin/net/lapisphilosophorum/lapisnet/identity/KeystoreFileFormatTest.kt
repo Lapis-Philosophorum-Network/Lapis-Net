@@ -40,10 +40,19 @@ class KeystoreFileFormatTest :
             }
         }
 
-        test("rejects a buffer where the stored public key does not match the private key") {
+        test("rejects a buffer where the stored secp256k1 public key does not match the private key") {
             val bytes = KeystoreFileFormat.encode(DualKeyIdentity.generate())
             // flip a byte inside the stored secp256k1 public key (offset 37..69)
             bytes[40] = (bytes[40] + 1).toByte()
+            shouldThrow<CorruptedIdentityFileException> {
+                KeystoreFileFormat.decode(bytes)
+            }
+        }
+
+        test("rejects a buffer where the stored Ed25519 public key does not match the private key") {
+            val bytes = KeystoreFileFormat.encode(DualKeyIdentity.generate())
+            // flip a byte inside the stored Ed25519 public key (offset 102..133)
+            bytes[105] = (bytes[105] + 1).toByte()
             shouldThrow<CorruptedIdentityFileException> {
                 KeystoreFileFormat.decode(bytes)
             }

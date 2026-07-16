@@ -13,6 +13,7 @@ import kotlin.io.path.nameWithoutExtension
 private val logger = KotlinLogging.logger {}
 
 private const val KEYSTORE_FILE_EXTENSION = "lnid"
+private val VALID_LABEL = Regex("^[A-Za-z0-9_-]{1,64}$")
 
 private val DIRECTORY_PERMISSIONS = PosixFilePermissions.fromString("rwx------")
 private val FILE_PERMISSIONS = PosixFilePermissions.fromString("rw-------")
@@ -40,6 +41,12 @@ class FileIdentityRepository(
         hardenPermissions(baseDirectory, DIRECTORY_PERMISSIONS)
     }
 
+    /**
+     * Lists stored identities. Fully loads (and cryptographically verifies) each one to obtain
+     * its fingerprint - the returned [IdentityHandle]s never carry private key material, but a
+     * single corrupted or loosely-permissioned file makes the whole call fail loudly rather than
+     * silently skipping that entry, consistent with [load]'s tamper-evident-by-default behavior.
+     */
     override fun list(): List<IdentityHandle> =
         Files
             .list(baseDirectory)
@@ -85,7 +92,12 @@ class FileIdentityRepository(
         return IdentityHandle(label, fingerprint)
     }
 
-    private fun fileFor(label: String): Path = baseDirectory.resolve("$label.$KEYSTORE_FILE_EXTENSION")
+    private fun fileFor(label: String): Path {
+        require(VALID_LABEL.matches(label)) {
+            "invalid identity label '$label' - must match ${VALID_LABEL.pattern} (no path separators or traversal)"
+        }
+        return baseDirectory.resolve("$label.$KEYSTORE_FILE_EXTENSION")
+    }
 
     private fun supportsPosixPermissions(path: Path): Boolean = "posix" in path.fileSystem.supportedFileAttributeViews()
 

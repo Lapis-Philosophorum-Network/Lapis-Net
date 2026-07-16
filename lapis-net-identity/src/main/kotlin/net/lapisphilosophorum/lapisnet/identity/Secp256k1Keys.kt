@@ -6,6 +6,8 @@ import java.security.SecureRandom
 
 private const val PRIVATE_KEY_SIZE = 32
 private const val COMPRESSED_PUBLIC_KEY_SIZE = 33
+private const val SIGNATURE_SIZE = 64
+private const val DIGEST_SIZE = 32
 private const val KEY_GENERATION_ATTEMPTS = 10
 
 /**
@@ -16,18 +18,22 @@ private const val KEY_GENERATION_ATTEMPTS = 10
 class Secp256k1PrivateKey(
     bytes: ByteArray,
 ) {
-    val bytes: ByteArray = bytes.copyOf()
+    private val storedBytes: ByteArray = bytes.copyOf()
+
+    /** Returns a fresh copy on every access - the caller cannot mutate the stored key through it. */
+    val bytes: ByteArray get() = storedBytes.copyOf()
 
     init {
-        require(bytes.size == PRIVATE_KEY_SIZE) { "secp256k1 private key must be $PRIVATE_KEY_SIZE bytes" }
-        require(Secp256k1.secKeyVerify(bytes)) {
+        require(storedBytes.size == PRIVATE_KEY_SIZE) { "secp256k1 private key must be $PRIVATE_KEY_SIZE bytes" }
+        require(Secp256k1.secKeyVerify(storedBytes)) {
             "invalid secp256k1 private key (zero, out of curve order, or otherwise degenerate)"
         }
     }
 
-    override fun equals(other: Any?): Boolean = other is Secp256k1PrivateKey && bytes.contentEquals(other.bytes)
+    override fun equals(other: Any?): Boolean =
+        other is Secp256k1PrivateKey && storedBytes.contentEquals(other.storedBytes)
 
-    override fun hashCode(): Int = bytes.contentHashCode()
+    override fun hashCode(): Int = storedBytes.contentHashCode()
 
     override fun toString(): String = "Secp256k1PrivateKey(REDACTED)"
 }
@@ -36,20 +42,24 @@ class Secp256k1PrivateKey(
 class Secp256k1PublicKey(
     bytes: ByteArray,
 ) {
-    val bytes: ByteArray = bytes.copyOf()
+    private val storedBytes: ByteArray = bytes.copyOf()
+
+    /** Returns a fresh copy on every access. */
+    val bytes: ByteArray get() = storedBytes.copyOf()
 
     init {
-        require(bytes.size == COMPRESSED_PUBLIC_KEY_SIZE) {
+        require(storedBytes.size == COMPRESSED_PUBLIC_KEY_SIZE) {
             "secp256k1 public key must be compressed ($COMPRESSED_PUBLIC_KEY_SIZE bytes)"
         }
     }
 
     /** Short hex fingerprint safe to log or display - never applies to private key material. */
-    fun fingerprint(): String = bytes.fingerprintHex()
+    fun fingerprint(): String = storedBytes.fingerprintHex()
 
-    override fun equals(other: Any?): Boolean = other is Secp256k1PublicKey && bytes.contentEquals(other.bytes)
+    override fun equals(other: Any?): Boolean =
+        other is Secp256k1PublicKey && storedBytes.contentEquals(other.storedBytes)
 
-    override fun hashCode(): Int = bytes.contentHashCode()
+    override fun hashCode(): Int = storedBytes.contentHashCode()
 
     override fun toString(): String = "Secp256k1PublicKey(${fingerprint()})"
 }
@@ -83,8 +93,10 @@ class Secp256k1KeyPair internal constructor(
      * the returned signature bytes at any log level.
      */
     fun sign(digest: ByteArray): ByteArray {
-        require(digest.size == 32) { "digest to sign must be exactly 32 bytes" }
-        return Secp256k1.sign(digest, privateKey.bytes)
+        require(digest.size == DIGEST_SIZE) { "digest to sign must be exactly $DIGEST_SIZE bytes" }
+        val signature = Secp256k1.sign(digest, privateKey.bytes)
+        check(signature.size == SIGNATURE_SIZE) { "Secp256k1.sign produced an unexpected signature length" }
+        return signature
     }
 }
 
@@ -93,7 +105,7 @@ fun Secp256k1PublicKey.verify(
     digest: ByteArray,
     signature: ByteArray,
 ): Boolean {
-    require(digest.size == 32) { "digest to verify must be exactly 32 bytes" }
-    require(signature.size == 64) { "signature must be a compact 64-byte ECDSA signature" }
+    require(digest.size == DIGEST_SIZE) { "digest to verify must be exactly $DIGEST_SIZE bytes" }
+    require(signature.size == SIGNATURE_SIZE) { "signature must be a compact $SIGNATURE_SIZE-byte ECDSA signature" }
     return Secp256k1.verify(signature, digest, bytes)
 }

@@ -17,13 +17,27 @@ private const val BINDING_DOMAIN_TAG = "LapisNet:identity-binding:v1"
  */
 class IdentityBinding(
     val ed25519PublicKey: Ed25519PublicKey,
-    val signature: ByteArray,
+    signature: ByteArray,
 ) {
+    private val storedSignature: ByteArray = signature.copyOf()
+
+    /** Returns a fresh copy on every access. */
+    val signature: ByteArray get() = storedSignature.copyOf()
+
     init {
         require(
-            signature.size == SIGNATURE_SIZE,
+            storedSignature.size == SIGNATURE_SIZE,
         ) { "binding signature must be a compact $SIGNATURE_SIZE-byte ECDSA signature" }
     }
+
+    override fun equals(other: Any?): Boolean =
+        other is IdentityBinding &&
+            ed25519PublicKey == other.ed25519PublicKey &&
+            storedSignature.contentEquals(other.storedSignature)
+
+    override fun hashCode(): Int = 31 * ed25519PublicKey.hashCode() + storedSignature.contentHashCode()
+
+    override fun toString(): String = "IdentityBinding(ed25519PublicKey=$ed25519PublicKey)"
 
     companion object {
         private fun bindingDigest(ed25519PublicKey: Ed25519PublicKey): ByteArray =

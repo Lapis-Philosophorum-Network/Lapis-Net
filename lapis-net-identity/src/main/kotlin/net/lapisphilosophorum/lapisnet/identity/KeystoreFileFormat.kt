@@ -82,21 +82,26 @@ object KeystoreFileFormat {
             )
         }
 
-        val ed25519PrivateKey =
+        val ed25519PrivateKeySeed =
             runCatchingCorruption {
-                Ed25519PrivateKey(
-                    bytes.copyOfRange(ED25519_PRIVATE_KEY_OFFSET, ED25519_PUBLIC_KEY_OFFSET),
-                )
+                bytes.copyOfRange(ED25519_PRIVATE_KEY_OFFSET, ED25519_PUBLIC_KEY_OFFSET).also { Ed25519PrivateKey(it) }
             }
-        val ed25519PublicKey =
+        val storedEd25519PublicKey =
             runCatchingCorruption { Ed25519PublicKey(bytes.copyOfRange(ED25519_PUBLIC_KEY_OFFSET, SIGNATURE_OFFSET)) }
         val signature = bytes.copyOfRange(SIGNATURE_OFFSET, FILE_SIZE)
+
+        val derivedEd25519KeyPair = Ed25519KeyPair.fromPrivateKeySeed(ed25519PrivateKeySeed)
+        if (derivedEd25519KeyPair.publicKey != storedEd25519PublicKey) {
+            throw CorruptedIdentityFileException(
+                "stored Ed25519 public key does not match the key derived from the private key - file corrupted or tampered",
+            )
+        }
 
         val identity =
             DualKeyIdentity(
                 derivedKeyPair,
-                Ed25519KeyPair(ed25519PrivateKey, ed25519PublicKey),
-                IdentityBinding(ed25519PublicKey, signature),
+                derivedEd25519KeyPair,
+                IdentityBinding(storedEd25519PublicKey, signature),
             )
         if (!identity.verifyBinding()) {
             throw CorruptedIdentityFileException("stored identity binding signature does not verify")

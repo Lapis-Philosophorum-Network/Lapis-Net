@@ -17,6 +17,11 @@ class CorruptedIdentityFileException(
 /**
  * Persists and retrieves [DualKeyIdentity] instances by label, so a user can hold multiple
  * pseudonyms (see the project's device-sync / self-trust design, implemented in a later wave).
+ *
+ * Not safe for concurrent first-run use: two callers racing [generateAndSave] for the same label
+ * each generate a different identity and the last writer's `save` wins - the loser keeps its
+ * in-memory identity but that identity is no longer the one on disk. Acceptable for the current
+ * single-process CLI usage; a future networked/multi-process caller should add its own locking.
  */
 interface IdentityRepository {
     fun list(): List<IdentityHandle>
