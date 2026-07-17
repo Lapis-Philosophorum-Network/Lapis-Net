@@ -1,0 +1,327 @@
+= Lapis Net Requirements Coverage
+
+This document tracks Lapis Net's requirements against what the V0.1 wave
+plan (see link:roadmap.adoc[roadmap.adoc] and
+link:architecture.adoc[architecture.adoc]) actually covers, and what a
+proposed V0.2+ wave plan would need to close. It complements the prose
+roadmap with a formal, machine-readable trace: which requirements V0.1
+already satisfies, which ones a later wave still needs to satisfy, and how
+the still-open requirements depend on each other.
+
+The diagram is authored in kUML and embedded via the `[kuml]` Asciidoctor
+macro, per this project's documentation convention (see
+xref:architecture.adoc#_diagrams[Diagrams] in architecture.adoc) — the
+`kuml-asciidoc` rendering pipeline is not yet wired into this repository's
+build, so this source does not render inline yet; it is committed as the
+authoritative, version-controlled model regardless.
+
+== Requirement Diagram
+
+[kuml, lapis-net-requirements, svg]
+----
+import dev.kuml.sysml2.dsl.sysml2Model
+
+sysml2Model(name = "LapisNetRequirements") {
+
+    // ── Top-level vision ────────────────────────────────────────────────
+    val vision = requirementDef(
+        name = "LapisNetVision",
+        reqId = "LN-000",
+        text = "Lapis Net shall provide a fully decentralized, censorship-resistant social network protocol with a neutral protocol core, pluggable multi-dimensional reputation scoring, and a pluggable application layer.",
+        subject = "LapisNet",
+    )
+
+    // ── Protocol core (mandatory for every participant) ────────────────
+    val protocolCore = requirementDef(
+        name = "ProtocolCore",
+        reqId = "LN-100",
+        text = "The protocol core shall provide identity, content storage, message propagation, and dual payment rails, mandatory for every participant.",
+        subject = "LapisNet",
+    )
+    val identity = requirementDef(
+        name = "IdentityRequirement",
+        reqId = "LN-101",
+        text = "Every participant is identified by a secp256k1 keypair with no recovery mechanism.",
+        subject = "Identity",
+    )
+    val storage = requirementDef(
+        name = "StorageRequirement",
+        reqId = "LN-102",
+        text = "Content is addressed and stored via Nabu (DHT + Bitswap) content-addressed storage.",
+        subject = "Storage",
+    )
+    val propagation = requirementDef(
+        name = "PropagationRequirement",
+        reqId = "LN-103",
+        text = "Signed records propagate between nodes via GossipSub over dedicated topics.",
+        subject = "Networking",
+    )
+    val paymentRails = requirementDef(
+        name = "PaymentRailsRequirement",
+        reqId = "LN-104",
+        text = "The protocol supports both Lightning (BOLT-12/L402) and on-chain (OP_RETURN) payment rails as equally valid proof types.",
+        subject = "Payments",
+    )
+    val lightningRail = requirementDef(
+        name = "LightningRailRequirement",
+        reqId = "LN-104a",
+        text = "Lightning payments use lightning-kmp, BOLT-12 Offers, and an L402/HTLC-preimage as payment proof.",
+        subject = "Payments",
+    )
+    val onChainRail = requirementDef(
+        name = "OnChainRailRequirement",
+        reqId = "LN-104b",
+        text = "On-chain payments use OP_RETURN transactions as payment proof.",
+        subject = "Payments",
+    )
+
+    // ── Scoring substrate (optional, pluggable, never mandatory) ───────
+    val scoringSubstrate = requirementDef(
+        name = "ScoringSubstrate",
+        reqId = "LN-200",
+        text = "The protocol provides four optional, pluggable reputation-scoring dimensions consumed by the application layer, never mandatory for protocol participation.",
+        subject = "LapisNet",
+    )
+    val veritas = requirementDef(
+        name = "VeritasRequirement",
+        reqId = "LN-201",
+        text = "Veritas provides a signed, versioned web-of-trust with shortest-path, lexicographically-tiebroken transitive trust aggregation.",
+        subject = "Veritas",
+    )
+    val karma = requirementDef(
+        name = "KarmaRequirement",
+        reqId = "LN-202",
+        text = "Karma provides a free, Sybil-resistant appreciation signal, weighted by Veritas and anchored to each voter's own Bitcoin transaction history.",
+        subject = "Karma",
+    )
+    val virtus = requirementDef(
+        name = "VirtusRequirement",
+        reqId = "LN-203",
+        text = "Virtus (LTR) provides a monetary, decaying content-boost signal bound to view-specific LtrRecords, purchasable via either payment rail.",
+        subject = "Virtus",
+    )
+    val madli = requirementDef(
+        name = "MadliRequirement",
+        reqId = "LN-204",
+        text = "Madli provides a five-metric reputation vector (reachability, bandwidth, latency, delivery integrity, routing helpfulness) that modulates Bitswap replication without self-reported metrics.",
+        subject = "Madli",
+    )
+
+    // ── Application layer (freely pluggable per vendor) ─────────────────
+    val applicationLayer = requirementDef(
+        name = "ApplicationLayer",
+        reqId = "LN-300",
+        text = "The application layer is freely pluggable per browser/view vendor and interprets the scoring substrate for end users.",
+        subject = "LapisNet",
+    )
+    val referenceBrowser = requirementDef(
+        name = "ReferenceBrowserRequirement",
+        reqId = "LN-301",
+        text = "A reference browser implements the Karma-to-Veritas-to-Virtus timeline pipeline, default trust-based filtering, and credibility color-coding as max(trust(author), trust(confirmer)).",
+        subject = "ReferenceBrowser",
+    )
+
+    // ── Communication subsystems (layered on the same stack) ───────────
+    val communicationSubsystems = requirementDef(
+        name = "CommunicationSubsystems",
+        reqId = "LN-400",
+        text = "Two additional real-time and asynchronous communication subsystems reuse the same protocol stack, layered independently of the scoring substrate.",
+        subject = "LapisNet",
+    )
+    val directMessaging = requirementDef(
+        name = "DirectMessagingRequirement",
+        reqId = "LN-401",
+        text = "Direct messages and calls use X3DH/Double Ratchet for 1:1 chats, MLS for groups, and WebRTC for voice/video/conferencing.",
+        subject = "DirectMessaging",
+    )
+    val asyncMessaging = requirementDef(
+        name = "AsyncMessagingRequirement",
+        reqId = "LN-402",
+        text = "Asynchronous messages replace email via ECIES-encrypted envelopes, a DHT-based inbox, and GossipSub delivery listeners, with a spam-deterrent stake.",
+        subject = "AsyncMessaging",
+    )
+
+    // ── Identity & bootstrap hardening (before real, non-test users) ───
+    val identityBootstrapHardening = requirementDef(
+        name = "IdentityBootstrapHardening",
+        reqId = "LN-500",
+        text = "Before onboarding real (non-test) users, identity and bootstrap mechanics beyond the local-only V0.1 baseline are hardened.",
+        subject = "LapisNet",
+    )
+    val genesisBootstrap = requirementDef(
+        name = "GenesisBootstrapRequirement",
+        reqId = "LN-501",
+        text = "A real genesis-node deployment and a QR-code/deep-link public-key exchange flow replace the placeholder bootstrap peer list.",
+        subject = "Bootstrap",
+    )
+    val multiDeviceLinking = requirementDef(
+        name = "MultiDeviceLinkingRequirement",
+        reqId = "LN-502",
+        text = "Users can link multiple pseudonym identities via a self-trust (Veritas = 1) UX flow.",
+        subject = "Identity",
+    )
+    val keystoreEncryption = requirementDef(
+        name = "KeystoreEncryptionRequirement",
+        reqId = "LN-503",
+        text = "Local keystores are encrypted at rest with a passphrase-derived key before custodying real Lightning funds.",
+        subject = "Identity",
+    )
+
+    // ── Satisfying design element: the V0.1 implementation itself ──────
+    val lapisNetV01 = partDef(name = "LapisNetV01")
+
+    // ── Verifying use case: the pilot community test from research §8/§9 ─
+    val pilotCommunityTest = useCaseDef(name = "PilotCommunityTest")
+
+    // ── Requirement Diagram ─────────────────────────────────────────────
+    reqDiagram(name = "Lapis Net — requirements coverage, V0.1 vs. full vision") {
+        // Nodes
+        include(definition = vision)
+        include(definition = protocolCore)
+        include(definition = identity)
+        include(definition = storage)
+        include(definition = propagation)
+        include(definition = paymentRails)
+        include(definition = lightningRail)
+        include(definition = onChainRail)
+        include(definition = scoringSubstrate)
+        include(definition = veritas)
+        include(definition = karma)
+        include(definition = virtus)
+        include(definition = madli)
+        include(definition = applicationLayer)
+        include(definition = referenceBrowser)
+        include(definition = communicationSubsystems)
+        include(definition = directMessaging)
+        include(definition = asyncMessaging)
+        include(definition = identityBootstrapHardening)
+        include(definition = genesisBootstrap)
+        include(definition = multiDeviceLinking)
+        include(definition = keystoreEncryption)
+        include(definition = lapisNetV01)
+        include(definition = pilotCommunityTest)
+
+        // Contains: top-level decomposition
+        contains(parent = vision, child = protocolCore)
+        contains(parent = vision, child = scoringSubstrate)
+        contains(parent = vision, child = applicationLayer)
+        contains(parent = vision, child = communicationSubsystems)
+        contains(parent = vision, child = identityBootstrapHardening)
+
+        // Contains: protocol core decomposition
+        contains(parent = protocolCore, child = identity)
+        contains(parent = protocolCore, child = storage)
+        contains(parent = protocolCore, child = propagation)
+        contains(parent = protocolCore, child = paymentRails)
+        contains(parent = paymentRails, child = lightningRail)
+        contains(parent = paymentRails, child = onChainRail)
+
+        // Contains: scoring substrate decomposition (the four dimensions)
+        contains(parent = scoringSubstrate, child = veritas)
+        contains(parent = scoringSubstrate, child = karma)
+        contains(parent = scoringSubstrate, child = virtus)
+        contains(parent = scoringSubstrate, child = madli)
+
+        // Contains: application layer decomposition
+        contains(parent = applicationLayer, child = referenceBrowser)
+
+        // Contains: communication subsystems decomposition
+        contains(parent = communicationSubsystems, child = directMessaging)
+        contains(parent = communicationSubsystems, child = asyncMessaging)
+
+        // Contains: identity/bootstrap hardening decomposition
+        contains(parent = identityBootstrapHardening, child = genesisBootstrap)
+        contains(parent = identityBootstrapHardening, child = multiDeviceLinking)
+        contains(parent = identityBootstrapHardening, child = keystoreEncryption)
+
+        // Derive: cross-cutting dependencies between still-open requirements
+        // Karma's voter weighting derives from Veritas (Karma - Dankbarkeit § Zusammenspiel mit Veritas)
+        derive(source = karma, target = veritas)
+        // Virtus purchase derives from having a payment rail at all
+        derive(source = virtus, target = paymentRails)
+        // The reference browser's timeline pipeline derives from all three consumed scoring dimensions
+        derive(source = referenceBrowser, target = veritas)
+        derive(source = referenceBrowser, target = karma)
+        derive(source = referenceBrowser, target = virtus)
+        // Multi-device linking derives from the Veritas self-trust grant model it reuses
+        derive(source = multiDeviceLinking, target = veritas)
+        // Keystore encryption must precede Lightning fund custody
+        derive(source = keystoreEncryption, target = lightningRail)
+
+        // Satisfy: what the V0.1 implementation (through V0.1.7) actually delivers
+        satisfy(source = lapisNetV01, requirement = identity)
+        satisfy(source = lapisNetV01, requirement = storage)
+        satisfy(source = lapisNetV01, requirement = propagation)
+        satisfy(source = lapisNetV01, requirement = veritas)
+
+        // Verify: the pilot community test (research roadmap §8/§9) verifies the top-level vision
+        verify(source = pilotCommunityTest, requirement = vision)
+    }
+}
+----
+
+== Reading the diagram
+
+* **`satisfy` edges** (from `LapisNetV01`) mark what V0.1 (through wave V0.1.7)
+  actually delivers: identity (`LN-101`), storage (`LN-102`), propagation
+  (`LN-103`), and Veritas (`LN-201`). Every other leaf requirement has no
+  `satisfy` edge — that is the visual definition of "not yet built."
+* **`contains` edges** mirror this document's grouping: protocol core,
+  scoring substrate (the four dimensions), application layer, communication
+  subsystems, and identity/bootstrap hardening.
+* **`derive` edges** capture real dependencies between still-open
+  requirements, taken directly from the research notes (e.g. Karma's voter
+  weighting depends on Veritas; the reference browser's timeline pipeline
+  depends on all three scoring dimensions it renders; keystore encryption
+  must land before Lightning custody, not after).
+* **`verify`** ties the pilot community test from the research roadmap
+  (testing with a small group — PdV, Girchi, the libertarian scene) back to
+  the top-level vision requirement.
+
+== Requirement-to-wave mapping
+
+[cols="1,2,3"]
+|===
+| Req ID | Requirement | Proposed wave
+
+| LN-101, LN-102, LN-103, LN-201
+| Identity, storage, propagation, Veritas
+| *Satisfied* — V0.1.1–V0.1.7
+
+| LN-203, LN-104b (partial)
+| Virtus / LTR core, on-chain rail
+| V0.2
+
+| LN-202
+| Karma
+| V0.3
+
+| LN-501, LN-502, LN-503
+| Genesis bootstrap, multi-device linking, keystore encryption
+| V0.4
+
+| LN-204
+| Madli
+| V0.5
+
+| LN-104, LN-104a
+| Payment rails, Lightning
+| V0.6
+
+| LN-301
+| Reference browser
+| V0.7
+
+| LN-401
+| Direct messaging and calls
+| V0.8
+
+| LN-402
+| Asynchronous messages
+| V0.9
+|===
+
+Full rationale for this wave sequencing — including the open question of
+whether the reference browser should move earlier to enable pilot testing
+sooner — lives in the vault's Forschungs-Roadmap under "Vorschlag: Wellen-Plan
+V0.2+" (not part of this repository; see the project's Obsidian vault).

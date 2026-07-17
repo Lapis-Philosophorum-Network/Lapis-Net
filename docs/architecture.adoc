@@ -395,3 +395,9 @@ Diagrams for this repository are authored in kUML and embedded via the
 the build (not yet done in V0.1.1 — no rendering pipeline exists in this
 wave). No diagrams are embedded here yet; the module map above is prose-only
 until that wiring lands.
+
+link:requirements.adoc[requirements.adoc] holds the first diagram-bearing
+document: a SysML 2 requirement diagram tracing which requirements V0.1
+satisfies versus what a proposed V0.2+ wave plan still needs to close. Its
+kUML source is committed as the authoritative model even though it does not
+render inline yet, for the same reason as above.
