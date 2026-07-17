@@ -117,12 +117,30 @@ class Secp256k1KeyPair internal constructor(
     }
 }
 
-/** Verifies a compact 64-byte ECDSA signature over a 32-byte digest. */
+/**
+ * Verifies a compact 64-byte ECDSA signature over a 32-byte digest.
+ *
+ * The [require] length checks above are hard preconditions on shape and stay unforgiving - a
+ * digest that isn't 32 bytes or a signature that isn't 64 bytes is a caller programming error,
+ * not untrusted-input territory. What is untrusted-input territory: a signature that *is* exactly
+ * 64 bytes but whose contents are not a well-formed `(r, s)` pair (e.g. `r` at or above the curve
+ * order) - live-repro'd against the real `secp256k1-kmp-jvm` jar to throw an uncaught
+ * `fr.acinq.secp256k1.Secp256k1Exception` out of the native call rather than returning `false`.
+ * Exactly the same bug class as [Secp256k1PublicKey]'s own constructor-time curve-validation fix
+ * (a native call throwing on malformed-but-right-length input instead of returning `false`) - but
+ * that fix only ever hardened public-key *construction*. Every caller of *this* function
+ * (including [net.lapisphilosophorum.lapisnet.trust.VeritasGossip]'s GossipSub validator, which
+ * calls it transitively via `VeritasGrant.verify` on every message from every peer, before any
+ * other check) needs the same hardening: a verify that can't cryptographically confirm a
+ * signature - for a genuine mismatch OR for malformed input - must return `false`, never throw.
+ * Fixing it here, at the shared root cause, makes every current and future caller safe by
+ * construction, rather than requiring each call site to remember to wrap it individually.
+ */
 fun Secp256k1PublicKey.verify(
     digest: ByteArray,
     signature: ByteArray,
 ): Boolean {
     require(digest.size == DIGEST_SIZE) { "digest to verify must be exactly $DIGEST_SIZE bytes" }
     require(signature.size == SIGNATURE_SIZE) { "signature must be a compact $SIGNATURE_SIZE-byte ECDSA signature" }
-    return Secp256k1.verify(signature, digest, bytes)
+    return runCatching { Secp256k1.verify(signature, digest, bytes) }.getOrDefault(false)
 }

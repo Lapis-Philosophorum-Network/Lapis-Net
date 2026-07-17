@@ -112,4 +112,60 @@ class Secp256k1KeyPairTest :
             val other = Secp256k1KeyPair.generate().publicKey
             (a == other) shouldBe false
         }
+
+        // --- degenerate-signature verify() hardening (round-2 C1 fix) ---------------------------
+
+        test("verify returns false, not throws, for a right-length all-0xFF degenerate signature") {
+            // Right-length (64 bytes) but not a well-formed (r, s) pair at all - this is the exact
+            // shape a malicious gossip peer can cheaply produce (see VeritasGossipNegativePathIntegrationTest).
+            // Before the fix, the native secp256k1-kmp-jvm call threw Secp256k1Exception here
+            // instead of returning false.
+            val keyPair = Secp256k1KeyPair.generate()
+            val degenerateSignature = ByteArray(64) { 0xFF.toByte() }
+            keyPair.publicKey.verify(digest, degenerateSignature) shouldBe false
+        }
+
+        test("verify returns false, not throws, for a signature whose r component is >= the curve order") {
+            // secp256k1 curve order n = FFFFFFFF FFFFFFFF FFFFFFFF FFFFFFFE BAAEDCE6 AF48A03B
+            // BFD25E8C D0364141. Using r == n (out of range) with a plausible low s.
+            val curveOrderR =
+                byteArrayOf(
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFF.toByte(),
+                    0xFE.toByte(),
+                    0xBA.toByte(),
+                    0xAE.toByte(),
+                    0xDC.toByte(),
+                    0xE6.toByte(),
+                    0xAF.toByte(),
+                    0x48.toByte(),
+                    0xA0.toByte(),
+                    0x3B.toByte(),
+                    0xBF.toByte(),
+                    0xD2.toByte(),
+                    0x5E.toByte(),
+                    0x8C.toByte(),
+                    0xD0.toByte(),
+                    0x36.toByte(),
+                    0x41.toByte(),
+                    0x41.toByte(),
+                )
+            val plausibleS = ByteArray(32).also { it[31] = 1 }
+            val degenerateSignature = curveOrderR + plausibleS
+            val keyPair = Secp256k1KeyPair.generate()
+            keyPair.publicKey.verify(digest, degenerateSignature) shouldBe false
+        }
     })

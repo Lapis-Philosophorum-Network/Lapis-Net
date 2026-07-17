@@ -18,6 +18,7 @@ import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
 
@@ -57,6 +58,28 @@ class LapisNode private constructor(
     private val discovered = BoundedPeerCache(MAX_DISCOVERED_PEERS)
     private val stopped = AtomicBoolean(false)
 
+    /**
+     * Set by `GossipPubSub.attach()` once GossipSub has been wired up on this node - a same-module
+     * signal purely between [connect] and `GossipPubSub.attach()`, not part of this class's public
+     * lifecycle API (round-2 N1 defensive check; see `GossipPubSub.attach`'s doc comment for the
+     * full precondition this supports and the doc comment on [connectsBeforeGossipAttach] for how
+     * the two are used together).
+     */
+    internal var gossipAttached: Boolean = false
+
+    /**
+     * Count of [connect] calls made while [gossipAttached] was still `false` - i.e. connections
+     * GossipSub can never see, regardless of whether `GossipPubSub.attach()` is called later
+     * (`Gossip` only observes connection-established events for connections made *after* it
+     * registers as a [io.libp2p.core.ConnectionHandler]). `GossipPubSub.attach()` reads this once,
+     * right after wiring up, to decide whether its documented "must be called before connect()"
+     * precondition was actually violated - see its doc comment for why the check lives there
+     * rather than here: at the moment [connect] runs, there is no way to know whether
+     * `GossipPubSub.attach()` will ever be called at all, and a node that legitimately never wants
+     * GossipSub must be free to call [connect] without triggering a warning.
+     */
+    internal val connectsBeforeGossipAttach = AtomicInteger(0)
+
     val peerId: PeerId get() = host.peerId
 
     fun listenAddresses(): List<Multiaddr> = host.listenAddresses()
@@ -68,10 +91,12 @@ class LapisNode private constructor(
     fun connect(
         peer: PeerInfo,
         timeout: Duration = DEFAULT_TIMEOUT,
-    ): Connection =
-        awaitOrWrap("connect to ${peer.peerId}", timeout) {
+    ): Connection {
+        if (!gossipAttached) connectsBeforeGossipAttach.incrementAndGet()
+        return awaitOrWrap("connect to ${peer.peerId}", timeout) {
             host.network.connect(peer.peerId, *peer.addresses.toTypedArray())
         }
+    }
 
     fun start(
         bootstrapPeers: List<Multiaddr> = BootstrapPeers.PLACEHOLDER,

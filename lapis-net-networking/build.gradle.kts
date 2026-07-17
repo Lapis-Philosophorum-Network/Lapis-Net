@@ -22,4 +22,10 @@ dependencies {
     implementation(project(":lapis-net-core"))
     api(project(":lapis-net-identity"))
     api(rootProject.libs.jvm.libp2p)
+
+    // Test-only concrete SLF4J backend, so GossipPubSubConnectOrderTest can attach a Logback
+    // ListAppender and assert on actual WARN-level log events (round-2 N1 regression test) - this
+    // module otherwise stays backend-free at compile/runtime (see lapis-net-cli's build.gradle.kts
+    // comment: it is the only module that ships a concrete backend for real usage).
+    testImplementation(rootProject.libs.logback.classic)
 }
