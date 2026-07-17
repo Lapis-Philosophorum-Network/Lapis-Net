@@ -2,10 +2,11 @@
 
 == Status
 
-V0.1.5: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
-content storage via Nabu (V0.1.4), and the Veritas trust-edge grant data
-model (V0.1.5, see below) are implemented. Remaining modules are still
-skeletons. This document grows as modules gain real implementations.
+V0.1.6: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
+content storage via Nabu (V0.1.4), the Veritas trust-edge grant data model
+(V0.1.5), and the Veritas transitive trust path-selection algorithm (V0.1.6,
+see below) are implemented. Remaining modules are still skeletons. This
+document grows as modules gain real implementations.
 
 == Layering
 
@@ -30,8 +31,9 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   digest and public-fingerprint helpers used by all signing code in the project
 * `lapis-net-identity` — identity (implemented in V0.1.2, see below)
 * `lapis-net-storage` — storage/DHT (Nabu, implemented in V0.1.4, see below)
-* `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (implemented in V0.1.5, see
-  below); shortest-path aggregation algorithm and network/storage integration are later waves
+* `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (V0.1.5) and the transitive
+  trust path-selection algorithm (V0.1.6, see below) are implemented; network propagation
+  (GossipSub) and persistence (Nabu) are later waves
 * `lapis-net-networking` — libp2p node bootstrap (implemented in V0.1.3, see below) and GossipSub (later wave)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness
@@ -157,7 +159,7 @@ root-caused.
 web-of-trust edge: a truster's secp256k1-signed statement of how much it trusts a target identity.
 It is a pure data-model wave — network propagation (GossipSub) and persistence (Nabu) are deferred
 to V0.1.7; the shortest-path aggregation algorithm that turns a graph of grants into a trust score
-between two arbitrary identities is deferred to V0.1.6.
+between two arbitrary identities is implemented in V0.1.6, below.
 
 **Fixed-point trust value.** Trust is represented as `trustMicros: Int` in `0..1_000_000`, not as a
 `Double`. A signed, cross-platform-verified structure cannot depend on floating-point arithmetic
@@ -209,6 +211,76 @@ in the constructor, converting any native failure into a clean `IllegalArgumentE
 applies project-wide, since the class is shared. `VeritasGrantCodec.decode()` was also hardened to
 reject non-zero reserved flag bits, so tampered bits can no longer silently round-trip as an equal
 grant.
+
+== Trust: transitive path selection (V0.1.6)
+
+`TrustGraph` and `TrustPathFinder` (in `lapis-net-trust`) compute a transitive trust score and
+winning path between a source and a target identity, over a graph of `VeritasGrant`-derived edges.
+This wave is pure algorithm: it consumes an already-resolved edge set (exactly one latest grant per
+`(truster, target)` pair) and does not itself fetch grants from storage or resolve a grant's
+backward-hash version chain to its latest entry — both remain V0.1.7 concerns.
+
+**Selection rule: shortest path first, then lexicographic tiebreak — not maximum product.** Trust
+along a path is the product of its edge weights, but when multiple shortest (fewest-hop) paths
+exist, the winner is not the one with the highest product; it is the one whose hop-weight sequence,
+compared from the source outward, is lexicographically greatest (highest first hop wins; ties are
+broken by the second hop, then the third, and so on). This models "the closer a person is to me,
+the better I can judge them" — a strong nearby relationship outweighs a clever construction of
+distant ones, and it is also manipulation-resistant: an attacker cannot inflate transitive trust by
+stacking high weights far out in the graph, since only the near edges are ever decisive. The
+project's canonical worked example (Odin → Frigg/Thor/Nanna → Freya, where the highest-product path
+via Nanna does *not* win because its first hop is weaker) is reproduced verbatim as a binding test
+fixture. Self-trust (`source == target`) is axiomatic (`1.0`); no path is `null` (default distrust,
+`0`); a zero-trust edge is a real hop that can legitimately be part of, and even win, the shortest
+path — there is no fallback to a longer, higher-trust alternative, matching the spec's explicit
+single-winner, no-aggregation design for V0.1.
+
+**Fixed-point score, `Long` accumulator.** The path score is computed as `trustMicros: Int` in the
+same fixed-point domain as `VeritasGrant.trustMicros`, via a `Long` intermediate accumulator
+(`acc = acc * weight / MAX_TRUST_MICROS` at each hop) — two `Int` values up to `1_000_000` multiply
+to roughly `10^12`, well past `Int.MAX_VALUE`, so the accumulator must widen even though the final
+result always fits back into an `Int`.
+
+**BFS with predecessor pointers, not eager path copies.** Finding "shortest path" means fewest
+hops, not lowest weighted distance — this is plain level-synchronous BFS, not Dijkstra. The
+algorithm's first implementation stored a full copy of the path-so-far (node list + weight list) at
+every node reached during the traversal; on a simple linear chain of `N` nodes this cost `O(N^2)`
+time and memory for a single query, and since Veritas grants are free to issue and self-signable in
+bulk, an attacker needed no cooperation from anyone else to construct such a chain — a real
+remote-DoS vector for the moment gossiped/stored grant data starts feeding real queries (V0.1.7).
+The fix replaces the eager copy with a predecessor-pointer scheme: each node stores only a pointer
+to its winning predecessor plus the single edge weight into it (`O(1)` per node), and the winning
+path is reconstructed exactly once, by walking predecessor pointers backward from the target, only
+after BFS finds it. The lexicographic tiebreak (needed when multiple predecessors reach the same
+node at the same BFS depth) is implemented as a pair of small recursive comparators that walk
+already-finalized predecessor chains, comparing the earliest (most significant) hop first with
+early exit on the first difference, rather than comparing pre-built arrays.
+
+**Constant-factor hardening.** A follow-up independent security audit found that while the
+predecessor-pointer redesign is asymptotically correct (`O(edges * MAX_HOP_DEPTH)`, confirmed by an
+independent hand-trace), the constant factor at the original defense-in-depth caps
+(`MAX_NODES = 50_000`, `MAX_EDGES = 200_000`) was not negligible: an adversarial graph where every
+edge shares the same weight forces every lexicographic comparison to recurse through the full
+predecessor chain before resolving (via a node-public-key-bytes tiebreak) instead of short-
+circuiting on the first differing hop — costing several hundred milliseconds per query at those
+caps, cheaply reachable since the attacker only needs free, self-signed grants. Two changes
+resolved this: `Secp256k1PublicKey.hashCode()` (in `lapis-net-identity`) is now cached at
+construction rather than recomputing a 33-byte content hash on every call — safe because the class
+is immutable, and a meaningful win since every recursive predecessor-chain comparison hits it via
+`HashMap` lookups; and the caps were tightened to `TrustGraph.MAX_NODES = 8_000`,
+`TrustGraph.MAX_EDGES = 32_000` (`TrustPathFinder.MAX_HOP_DEPTH` stayed at `20`, itself independently
+justified by trust decay: even a generous uniform `0.9` weight per hop decays to `0.9^20 ≈ 0.12` by
+that depth, so longer paths are already close to meaningless as trust signals). Re-measured against
+the worst adversarial construction found across two independent audit rounds — a tie-heavy graph
+shifted to the maximum recursion depth the hop cap allows, not just concentrated at the first two
+hops — worst-case cost at the new caps is roughly 35-50ms, an order of magnitude better than at the
+original caps and comfortably within the caps' own generous-for-personal-scale headroom (Dunbar's
+number is roughly 150; 8,000 nodes is far beyond any realistic personal web-of-trust).
+
+This wave went through three rounds of independent review/security audit before landing — the
+correctness of the BFS/tiebreak algorithm itself was hand-traced and approved in the first round and
+never needed to change again; both follow-up rounds addressed resource-exhaustion cost at scale, not
+correctness.
 
 == Diagrams
 
