@@ -61,13 +61,22 @@ class Secp256k1PublicKey(
         }
     }
 
+    // Cached at construction, not recomputed per call: storedBytes never changes after the init
+    // block above runs (bytes returns a defensive copy; the array it copies from is fixed for the
+    // object's lifetime), so contentHashCode() always produces the same result for this instance -
+    // safe to compute once, same pattern as java.lang.String's cached hashCode. This matters
+    // because Secp256k1PublicKey is used as a HashMap/HashSet key throughout lapis-net-trust's
+    // hot BFS path (TrustPathFinder's `best`/`visited`/`candidates` maps), where hashCode() is
+    // called far more often than the key is constructed.
+    private val cachedHashCode: Int = storedBytes.contentHashCode()
+
     /** Short hex fingerprint safe to log or display - never applies to private key material. */
     fun fingerprint(): String = storedBytes.fingerprintHex()
 
     override fun equals(other: Any?): Boolean =
         other is Secp256k1PublicKey && storedBytes.contentEquals(other.storedBytes)
 
-    override fun hashCode(): Int = storedBytes.contentHashCode()
+    override fun hashCode(): Int = cachedHashCode
 
     override fun toString(): String = "Secp256k1PublicKey(${fingerprint()})"
 }

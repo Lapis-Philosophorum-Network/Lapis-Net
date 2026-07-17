@@ -5,6 +5,7 @@ import io.ipfs.multihash.Multihash
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.nulls.shouldBeNull
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.types.shouldBeInstanceOf
 import net.lapisphilosophorum.lapisnet.core.crypto.domainSeparatedDigest
 import net.lapisphilosophorum.lapisnet.identity.Secp256k1KeyPair
 
@@ -57,12 +58,28 @@ class VeritasGrantTest :
             val target = Secp256k1KeyPair.generate().publicKey
             val grant = VeritasGrant.create(truster, target, trustMicros = 500_000)
 
-            val tampered =
-                tamperedCopy(grant) { bytes ->
-                    // target starts right after magic(4) + version(1) + flags(1) + truster(33)
-                    bytes[4 + 1 + 1 + 33] = (bytes[4 + 1 + 1 + 33] + 1).toByte()
+            // Byte 0 of target's compressed key is the parity prefix (0x02/0x03). Incrementing it
+            // by 1 lands on a *different* valid prefix about half the time (0x02<->0x03, the same
+            // X coordinate's other Y root - still a valid curve point, just a different target key,
+            // so decode() succeeds and verify() must catch the now-mismatched signature), and on an
+            // invalid prefix (e.g. 0x04) the other half - which VeritasGrantCodec.decode() must
+            // reject outright (curve-point validation, see Secp256k1PublicKey's constructor) rather
+            // than silently accept. Both outcomes are "tampering was caught"; assert either one
+            // instead of assuming a specific branch, since which one occurs depends on the randomly
+            // generated key's own parity.
+            val result =
+                runCatching {
+                    tamperedCopy(grant) { bytes ->
+                        // target starts right after magic(4) + version(1) + flags(1) + truster(33)
+                        bytes[4 + 1 + 1 + 33] = (bytes[4 + 1 + 1 + 33] + 1).toByte()
+                    }
                 }
-            VeritasGrant.verify(tampered) shouldBe false
+            val tampered = result.getOrNull()
+            if (tampered != null) {
+                VeritasGrant.verify(tampered) shouldBe false
+            } else {
+                result.exceptionOrNull().shouldBeInstanceOf<MalformedVeritasGrantException>()
+            }
         }
 
         test("tampering trustMicros breaks verification") {

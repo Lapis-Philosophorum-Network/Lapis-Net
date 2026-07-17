@@ -91,4 +91,25 @@ class Secp256k1KeyPairTest :
                 keyPair.sign(ByteArray(31))
             }
         }
+
+        // --- hashCode caching (round-2 DoS constant-factor fix) --------------------------------
+
+        test("hashCode is cached but stays consistent with equals across independent instances") {
+            // Secp256k1PublicKey.hashCode() is cached at construction (see its doc comment) since
+            // the object is immutable - this must not weaken the hashCode/equals contract that
+            // lapis-net-trust's HashMap/HashSet-keyed BFS (TrustPathFinder) relies on: two
+            // DIFFERENT Secp256k1PublicKey instances built from the same underlying bytes must
+            // still report equal hashCodes (and be equal), and calling hashCode() repeatedly on the
+            // same instance must keep returning the identical value.
+            val bytes = Secp256k1KeyPair.generate().publicKey.bytes
+            val a = Secp256k1PublicKey(bytes)
+            val b = Secp256k1PublicKey(bytes.copyOf())
+
+            (a == b) shouldBe true
+            a.hashCode() shouldBe b.hashCode()
+            a.hashCode() shouldBe a.hashCode() // repeated calls on the same instance are stable
+
+            val other = Secp256k1KeyPair.generate().publicKey
+            (a == other) shouldBe false
+        }
     })
