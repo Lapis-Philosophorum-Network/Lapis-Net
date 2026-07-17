@@ -74,6 +74,17 @@ class Secp256k1KeyPairTest :
             }
         }
 
+        test("rejects a public key of the correct length that is not a valid point on the curve") {
+            // Correct-length (33) bytes with a plausible compressed-key prefix, but the X
+            // coordinate has no corresponding point on the curve. Without this check, a caller
+            // constructing a Secp256k1PublicKey from untrusted/decoded bytes (e.g. a Veritas
+            // grant read off the DFS) would silently succeed, and a *later* call to verify()
+            // would throw an uncaught native exception instead of returning false.
+            shouldThrow<IllegalArgumentException> {
+                Secp256k1PublicKey(byteArrayOf(0x02) + ByteArray(32))
+            }
+        }
+
         test("rejects signing a digest of the wrong length") {
             val keyPair = Secp256k1KeyPair.generate()
             shouldThrow<IllegalArgumentException> {

@@ -51,6 +51,14 @@ class Secp256k1PublicKey(
         require(storedBytes.size == COMPRESSED_PUBLIC_KEY_SIZE) {
             "secp256k1 public key must be compressed ($COMPRESSED_PUBLIC_KEY_SIZE bytes)"
         }
+        // Bytes of the right length are not necessarily a valid point on the curve. Without this
+        // check, constructing a Secp256k1PublicKey from untrusted/decoded bytes (e.g. a Veritas
+        // grant read off the DFS) would silently succeed, and a *later* call to verify() would
+        // throw an uncaught native Secp256k1Exception instead of returning false - turning any
+        // caller that verifies a batch/stream of untrusted grants into a trivial remote DoS.
+        require(runCatching { Secp256k1.pubkeyParse(storedBytes) }.isSuccess) {
+            "secp256k1 public key bytes do not represent a valid point on the curve"
+        }
     }
 
     /** Short hex fingerprint safe to log or display - never applies to private key material. */
