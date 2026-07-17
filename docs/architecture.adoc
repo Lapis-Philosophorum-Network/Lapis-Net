@@ -2,11 +2,12 @@
 
 == Status
 
-V0.1.6: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
+V0.1.7: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
 content storage via Nabu (V0.1.4), the Veritas trust-edge grant data model
-(V0.1.5), and the Veritas transitive trust path-selection algorithm (V0.1.6,
-see below) are implemented. Remaining modules are still skeletons. This
-document grows as modules gain real implementations.
+(V0.1.5), the Veritas transitive trust path-selection algorithm (V0.1.6), and
+GossipSub propagation + Nabu persistence of Veritas grants (V0.1.7, see below)
+are implemented. Remaining modules are still skeletons. This document grows
+as modules gain real implementations.
 
 == Layering
 
@@ -31,10 +32,10 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   digest and public-fingerprint helpers used by all signing code in the project
 * `lapis-net-identity` — identity (implemented in V0.1.2, see below)
 * `lapis-net-storage` — storage/DHT (Nabu, implemented in V0.1.4, see below)
-* `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (V0.1.5) and the transitive
-  trust path-selection algorithm (V0.1.6, see below) are implemented; network propagation
-  (GossipSub) and persistence (Nabu) are later waves
-* `lapis-net-networking` — libp2p node bootstrap (implemented in V0.1.3, see below) and GossipSub (later wave)
+* `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (V0.1.5), the transitive
+  trust path-selection algorithm (V0.1.6), and GossipSub propagation + Nabu persistence (V0.1.7,
+  see below) are all implemented
+* `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness
 
@@ -89,8 +90,8 @@ jvm-libp2p is not published to Maven Central; it ships across three mirrors (Clo
 Consensys artifacts) that must all be declared as repositories, since its own transitive
 dependencies (`java-multibase`, `noise-java`) are split across them.
 
-GossipSub pub/sub and NAT traversal are explicitly out of scope for this wave and land in later
-ones (V0.1.7 and an open research item, respectively).
+GossipSub pub/sub and NAT traversal are explicitly out of scope for this wave; GossipSub lands in
+V0.1.7 (see below), NAT traversal remains an open research item.
 
 == Storage (V0.1.4)
 
@@ -157,9 +158,9 @@ root-caused.
 
 `VeritasGrant` (in `lapis-net-trust`) is the signed, versioned data model for a single Veritas
 web-of-trust edge: a truster's secp256k1-signed statement of how much it trusts a target identity.
-It is a pure data-model wave — network propagation (GossipSub) and persistence (Nabu) are deferred
-to V0.1.7; the shortest-path aggregation algorithm that turns a graph of grants into a trust score
-between two arbitrary identities is implemented in V0.1.6, below.
+It is a pure data-model wave — network propagation (GossipSub) and persistence (Nabu) are
+implemented in V0.1.7, below; the shortest-path aggregation algorithm that turns a graph of grants
+into a trust score between two arbitrary identities is implemented in V0.1.6, below.
 
 **Fixed-point trust value.** Trust is represented as `trustMicros: Int` in `0..1_000_000`, not as a
 `Double`. A signed, cross-platform-verified structure cannot depend on floating-point arithmetic
@@ -218,7 +219,7 @@ grant.
 winning path between a source and a target identity, over a graph of `VeritasGrant`-derived edges.
 This wave is pure algorithm: it consumes an already-resolved edge set (exactly one latest grant per
 `(truster, target)` pair) and does not itself fetch grants from storage or resolve a grant's
-backward-hash version chain to its latest entry — both remain V0.1.7 concerns.
+backward-hash version chain to its latest entry — both are implemented in V0.1.7, below.
 
 **Selection rule: shortest path first, then lexicographic tiebreak — not maximum product.** Trust
 along a path is the product of its edge weights, but when multiple shortest (fewest-hop) paths
@@ -281,6 +282,111 @@ This wave went through three rounds of independent review/security audit before 
 correctness of the BFS/tiebreak algorithm itself was hand-traced and approved in the first round and
 never needed to change again; both follow-up rounds addressed resource-exhaustion cost at scale, not
 correctness.
+
+== Trust: propagation and persistence (V0.1.7)
+
+`GossipPubSub` (in `lapis-net-networking`) and `VeritasGossip`/`VeritasGrantIndex`/
+`VeritasGrantResolver` (in `lapis-net-trust`) close the loop V0.1.3-V0.1.6 left open: a node can now
+announce a locally-created `VeritasGrant` to its peers over a dedicated GossipSub topic, receive and
+validate grants announced by others, persist them into `NabuStorage`, and resolve the "latest grant
+per `(truster, target)` pair" edge set that `TrustGraph.fromGrants()` expects.
+
+**Layering.** `GossipPubSub` is domain-agnostic (raw topic strings, `ByteArray` in/out) and lives in
+`lapis-net-networking`, layered onto an already-`start()`-ed `LapisNode`'s `Host` exactly the way
+`NabuStorage` layers Bitswap/Kademlia onto the same `Host` in V0.1.4. `VeritasGossip` is the
+Veritas-specific wiring on top: topic naming, structural decode, signature verification, and the
+persistence/resolution logic. `lapis-net-trust` gained a new `api(project(":lapis-net-storage"))`
+dependency this wave, since `NabuStorage` now appears directly in `VeritasGossip`'s public factory
+signature.
+
+**Two separate signature layers that must never be confused.** GossipSub has its own message-layer
+authentication (the `from`/`seqno`/`signature` RPC fields), signed with the node's libp2p Ed25519
+identity key (`Host.privKey`) — this is entirely separate from a `VeritasGrant`'s secp256k1 truster
+signature, and `GossipPubSub` never touches the latter.
+
+**Full grant bytes are published, not a CID pointer.** A `VeritasGrant`'s encoded size
+(`VeritasGrantCodec.MAX_BODY_SIZE` plus a 64-byte signature) is tiny relative to any reasonable
+gossip message-size ceiling, and — decisively — `NabuStorage`'s documented V0.1.4 known limitation
+is that cross-node DHT provider discovery (`findProviders()`) does not work: a node receiving only a
+bare CID over gossip would have no reliable way to fetch the actual content. Publishing full bytes
+sidesteps that broken discovery path entirely.
+
+**The GossipSub validator gates both structural and cryptographic acceptance in one step.**
+`VeritasGossip.onGossipMessage()` decodes (`VeritasGrantCodec.decode()`), then verifies
+(`VeritasGrant.verify()`), before any side effect — deliberately not split into "validate then
+separately accept", since GossipSub's own re-propagation to the rest of the mesh is gated purely by
+the validator's returned `ValidationResult`; deferring signature verification to a later step would
+mean every relaying node re-gossips signature-invalid garbage before individually declining to act
+on it.
+
+**Latest-grant-per-pair resolution.** `VeritasGrantResolver.resolveLatest()` collapses a (possibly
+forked, possibly byzantine) set of candidate grants for one `(truster, target)` pair down to a
+single winner: only signature-valid candidates are considered; every valid genesis grant is a root;
+an iterative depth-first walk (explicit stack, not recursion, to avoid stack-overflow risk at
+`MAX_CHAIN_DEPTH = 4_096`) follows the backward-hash chain forward from each root, tracking a
+visited set to guard against (cryptographically infeasible, but defended anyway) cycles; the winner
+among all resulting tip candidates is the one at the greatest depth, tied-broken by
+lexicographically-greatest content-id bytes. This tiebreak is deliberately receipt-order-independent
+— it depends only on the final candidate set, never on the order candidates arrived via gossip — so
+two nodes that eventually observe the same grants via differently-ordered deliveries converge on the
+identical resolved graph.
+
+**Known, deliberately accepted gaps** (matching this project's established practice of documenting
+limitations rather than silently shipping them):
+
+* The in-memory `VeritasGrantIndex` is never rebuilt by scanning Nabu's local blockstore at startup
+  — `NabuStorage` has no "enumerate local CIDs" primitive. A restarted node starts with an empty
+  index regardless of what it durably persisted in a previous run.
+* A node joining after a grant's gossip window has passed has no backfill path — gossip carries full
+  bytes but only propagates live, never historically. This is best-effort convergence, not
+  always-eventually-consistent.
+* Unbounded message *rate* from a single peer is not defended against at the application layer —
+  deferred to jvm-libp2p's own GossipSub mesh-control-message rate limiting.
+
+**This wave went through four rounds of independent review/security audit — the most of any wave so
+far** (V0.1.6's three-round precedent was the previous high-water mark), because it's the first wave
+where `VeritasGrant`s actually arrive from untrusted network peers rather than being constructed
+locally for tests:
+
+* *Critical:* `VeritasGossip.onGossipMessage()` called `VeritasGrant.verify()` unguarded. A
+  structurally-right-length but cryptographically degenerate 64-byte signature (e.g. all-`0xFF`
+  bytes, or an `r` component at/above the secp256k1 curve order) makes the native
+  `Secp256k1.verify()` call throw an uncaught exception instead of returning `false` — the same bug
+  class as V0.1.5's `Secp256k1PublicKey` curve-validation fix, but that fix only ever hardened
+  public-key *construction*, never signature *verification*. Live-repro'd against the real
+  `secp256k1-kmp-jvm` jar. Fixed at the shared root cause — `Secp256k1PublicKey.verify()` (in
+  `lapis-net-identity`) now wraps the native call in a catch-all, converting any failure into a
+  clean `false` — rather than patching just the new call site, so every current and future caller is
+  safe by construction.
+* *Critical:* `NabuStorage.put()` ran unconditionally for every signature-valid grant, and
+  `VeritasGrantIndex.add()`'s return value was discarded — meaning the index's capacity cap bounded
+  neither disk writes nor GossipSub re-propagation (`ValidationResult.Valid` is what triggers every
+  relaying node's own mesh-wide re-broadcast). Since Veritas grants cost nothing to issue, a cheap
+  attacker could force unbounded, network-amplified disk growth across every node in the mesh.
+* *Major:* `GossipPubSub.attach()` left GossipSub's own RPC-frame-shape limits
+  (`maxPublishedMessages` etc.) at jvm-libp2p's actual default of "no limit" (confirmed by
+  decompiling the real jar) — one peer could pack thousands of distinct grants into a single RPC
+  frame, forcing unbounded decode+verify work per frame. Fixed by explicitly bounding
+  `maxPublishedMessages`/`maxSubscriptions` via `GossipParamsBuilder`.
+* *Major:* `VeritasGrantIndex` had no eviction once full — a cheap attacker filling the shared cap
+  could permanently prevent a node from ever tracking new legitimate grants, including a legitimate
+  revocation of a compromised or malicious truster (per the domain model, revocation is just a new
+  grant with `trustMicros = 0`, not a distinct operation). Fixed with LRU-style eviction, mirroring
+  `lapis-net-storage`'s `BoundedRecordStore` pattern.
+* *The most interesting finding:* fixing the eviction gap (above) silently reopened the disk-growth
+  gap (above it) — once the index stopped hard-rejecting at capacity and started evicting instead,
+  its `canAccept()` check no longer had any "index is full" case left to report, so gating
+  `storage.put()` on it alone stopped bounding persistence at all. This was caught independently by
+  two review agents via two different methods (a hand-trace and an executed repro with `maxTracked =
+  2` and 10 distinct grants, all 10 of which landed on disk) converging on the identical finding in
+  the same round. Resolved by decoupling the two concerns: the in-memory trust-view index
+  (`grantsByContentId`/`grantsByPair`, read exclusively by `TrustGraph`/`currentGrants()`) keeps its
+  evicting policy — never permanently locking out legitimate updates is the correct policy for a live
+  view — while a new, separate, non-evicting, hard-capped structure (`persistedContentIds`, gated via
+  `VeritasGrantIndex.tryReservePersistence()`, cap `MAX_PERSISTED_GRANTS = 64_000`) independently
+  bounds whether a durable disk copy gets written. A grant that clears the persistence cap still gets
+  indexed and still propagates — this node's own disk budget has no bearing on trust-view correctness
+  or mesh-wide convergence, since neither ever reads from disk.
 
 == Diagrams
 
