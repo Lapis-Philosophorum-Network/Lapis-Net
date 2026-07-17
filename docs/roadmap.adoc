@@ -9,7 +9,7 @@ edges between local nodes.
 | Wave | Content
 
 | V0.1.1
-| Gradle multi-module skeleton + CI/CD skeleton (this wave).
+| Gradle multi-module skeleton + CI/CD skeleton.
 
 | V0.1.2
 | Identity layer: secp256k1 keypair generation/persistence, dual-key binding to Ed25519 for the libp2p peer ID.
@@ -32,6 +32,11 @@ edges between local nodes.
 | V0.1.8
 | Minimal CLI / test harness: demo with N local nodes, trust-edge issuance and propagation made visible.
 |===
+
+== Progress
+
+V0.1.1 through V0.1.5 are implemented (see `docs/architecture.adoc` for
+details). V0.1.6 (path algorithm) is next.
 
 After V0.1: content publishing via `LtrRecord` (on-chain first, for easier
 testing), then a pilot with a small group (PdV, Girchi, libertarian
