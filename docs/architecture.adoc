@@ -615,6 +615,22 @@ against the fix.
 With V0.2.2 landed, the V0.2 milestone (Virtus/LTR economy plus a real, usable first client) is
 complete.
 
+**UI/UX design-team review (retroactive).** The project's house rule requiring every UI/UX task to
+go through a fixed design panel (Kare, Tesler, Atkinson, Kay, Norman, Raskin, Rams, Ive, Forstall,
+Duarte, Zhuo, with Steve Jobs's final review) was added after the static UI above already shipped —
+applied retroactively as a follow-up commit. Seven changes landed: shape+glyph (not hue alone) on
+the credibility badge so `NO_PATH` can never be mistaken for a low `RESOLVED` score even under
+colorblindness or a fast skim; an always-open on-page explainer for what the badge and LTR boost
+mean; an explicit disclosure before a trust rating is submitted that it is a public, signed,
+accountable statement; a brief success flash on the timeline item that just changed; a
+primary/secondary button hierarchy; numbers paired with plain words ("Trusted · 62%", "Boosted 2.50
+sats by 3 supporters"); and a labeled identity ("You:") instead of a bare hex string as the first
+thing a first-time reader sees. No framework, build step, or dependency was added — this stayed
+within the already-decided hand-written HTML/CSS/vanilla-JS tech stack, and the `textContent`-only
+XSS discipline is unchanged. Two real improvements (showing the actual trust path, visualizing LTR
+decay over time) were explicitly deferred, not silently dropped — both need new fields in the
+`/api/timeline` response that the server doesn't currently send.
+
 == Diagrams
 
 Diagrams for this repository are authored in kUML and embedded via the
