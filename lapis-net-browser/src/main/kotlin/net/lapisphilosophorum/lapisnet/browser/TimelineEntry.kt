@@ -17,8 +17,13 @@ data class TimelineCandidate(
 
 /**
  * A [TimelineCandidate] after [TimelineBuilder.build] has scored it: its resolved
- * [credibility][Credibility], its accumulated Virtus/LTR sort-weight ([ltrWeightMsat]), and whether
- * it falls below the caller's credibility filter threshold ([filteredOut]).
+ * [credibility][Credibility], its accumulated Virtus/LTR sort-weight ([ltrWeightMsat]), its
+ * personalized Karma score ([karmaScore]/[karmaVoteCount]), and whether it falls below the caller's
+ * credibility filter threshold ([filteredOut]).
+ *
+ * **[karmaScore]/[karmaVoteCount] are deliberately additive/display-only fields - see
+ * [TimelineBuilder.build]'s doc comment for why Karma never affects [filteredOut] or sort order in
+ * this wave.**
  */
 data class TimelineEntry(
     val cid: Cid,
@@ -27,5 +32,7 @@ data class TimelineEntry(
     val credibility: Credibility,
     val ltrWeightMsat: Double,
     val ltrRecordCount: Int,
+    val karmaScore: Double,
+    val karmaVoteCount: Int,
     val filteredOut: Boolean,
 )

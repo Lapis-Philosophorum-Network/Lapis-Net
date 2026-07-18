@@ -8,6 +8,9 @@ import io.ktor.server.netty.NettyApplicationEngine
 import io.libp2p.core.multiformats.Multiaddr
 import kotlinx.coroutines.runBlocking
 import net.lapisphilosophorum.lapisnet.identity.DualKeyIdentity
+import net.lapisphilosophorum.lapisnet.karma.BitcoinTimeAnchorSource
+import net.lapisphilosophorum.lapisnet.karma.ElectrumTimeAnchorSource
+import net.lapisphilosophorum.lapisnet.karma.KarmaGossip
 import net.lapisphilosophorum.lapisnet.networking.GossipPubSub
 import net.lapisphilosophorum.lapisnet.networking.LapisNode
 import net.lapisphilosophorum.lapisnet.storage.NabuStorage
@@ -49,6 +52,8 @@ class BrowserServer private constructor(
     private val pubsub: GossipPubSub,
     private val veritas: VeritasGossip,
     private val virtus: LtrGossip,
+    private val karma: KarmaGossip,
+    private val karmaAnchorCache: KarmaAnchorCache,
     private val posts: PostAnnouncementGossip,
     private val httpEngine: EmbeddedServer<NettyApplicationEngine, NettyApplicationEngine.Configuration>,
     /** The HTTP port actually bound, resolved after [httpEngine] started - may differ from the
@@ -70,7 +75,8 @@ class BrowserServer private constructor(
      * Symmetric teardown, mirroring
      * [net.lapisphilosophorum.lapisnet.cli.LapisNetCli.runMultiNodeTrustPropagationDemo]'s
      * established ordering exactly: the HTTP engine and every gossip/storage layer are stopped in
-     * the reverse order they were attached in [start]. [posts]/[virtus]/[veritas]/[pubsub]/[storage]
+     * the reverse order they were attached in [start].
+     * [posts]/[karma]/[virtus]/[veritas]/[pubsub]/[storage]
      * are plain, unwrapped calls, since each of those is documented as a genuine no-op (verified:
      * their `stop()` implementations are literal no-ops or trivial flag-sets - unlike [httpEngine],
      * none of them owns a real socket or thread pool). [httpEngine] (a real Netty socket + thread
@@ -81,11 +87,18 @@ class BrowserServer private constructor(
      * [runCatching] swallows the failure before execution reaches the next statement), and
      * [LapisNode.stop]'s in the outer `finally` block, so a failure in any earlier step never leaks
      * the underlying host/socket.
+     *
+     * **[karma] does not own an Electrum connection to tear down here.** [KarmaAnchorCache]'s
+     * lazily-established Electrum connection (if any was ever made) is a separate, known, documented
+     * resource-lifecycle gap for this wave - see [KarmaAnchorCache]'s doc comment.
+     * [karma].`stop()` itself is a plain GossipSub unsubscribe, exactly like
+     * [virtus]/[veritas]/[posts].
      */
     fun stop() {
         try {
             runCatching { httpEngine.stop(HTTP_STOP_GRACE_PERIOD_MILLIS, HTTP_STOP_TIMEOUT_MILLIS) }
             posts.stop()
+            karma.stop()
             virtus.stop()
             veritas.stop()
             pubsub.stop()
@@ -98,11 +111,25 @@ class BrowserServer private constructor(
     companion object {
         /**
          * Builds and starts a full [BrowserServer]: a real [LapisNode] (identity, GossipSub, Nabu
-         * storage, Veritas/Virtus/post gossip - in that attach order, mirroring
+         * storage, Veritas/Virtus/Karma/post gossip - in that attach order, mirroring
          * [net.lapisphilosophorum.lapisnet.cli.LapisNetCli]'s established wiring pattern exactly)
          * plus the embedded HTTP server. [httpHost] MUST stay `127.0.0.1` - see this class's doc
          * comment. [httpPort] `0` requests an OS-assigned port, read back via the returned
          * server's [boundPort].
+         *
+         * [KarmaAnchorCache] is built here over [karmaAnchorSource], which defaults to a real
+         * [ElectrumTimeAnchorSource] using its default, no-argument constructor - i.e.
+         * [net.lapisphilosophorum.lapisnet.karma.ElectrumServers.PLACEHOLDER]'s empty server list,
+         * unless/until a real deployment configuration wires in a real server list. Constructing the
+         * default does no network I/O by itself (the underlying Electrum connection is established
+         * lazily, on the first real vote - see
+         * [net.lapisphilosophorum.lapisnet.karma.RealElectrumRpc]'s doc comment), so this is safe to
+         * do unconditionally on every [start] call. [karmaAnchorSource] is overridable purely as a
+         * test seam (mirroring [nodeForTesting]/[pubsubForTesting]'s established reasoning) - with
+         * the default empty [net.lapisphilosophorum.lapisnet.karma.ElectrumServers.PLACEHOLDER],
+         * every real `POST /api/karma` call fails with a clean 502 in any environment without a
+         * configured, reachable Electrum server (see `BrowserApi`'s `/api/karma` route), which would
+         * make a real end-to-end test of Karma vote propagation impossible without this override.
          */
         fun start(
             identity: DualKeyIdentity,
@@ -110,6 +137,7 @@ class BrowserServer private constructor(
             httpPort: Int = DEFAULT_BROWSER_HTTP_PORT,
             bootstrapPeers: List<Multiaddr> = emptyList(),
             dataDirectory: Path,
+            karmaAnchorSource: BitcoinTimeAnchorSource = ElectrumTimeAnchorSource(),
         ): BrowserServer {
             require(httpHost == "127.0.0.1") {
                 "BrowserServer must bind 127.0.0.1 only - refusing to start on '$httpHost' " +
@@ -127,9 +155,12 @@ class BrowserServer private constructor(
             val pubsub = GossipPubSub.attach(node)
             val veritas = VeritasGossip.attach(pubsub, storage)
             val virtus = LtrGossip.attach(pubsub, storage)
+            val karma = KarmaGossip.attach(pubsub, storage)
             val posts = PostAnnouncementGossip.attach(pubsub, storage)
+            val karmaAnchorCache = KarmaAnchorCache(karmaAnchorSource)
 
-            val deps = BrowserApiDependencies(identity, node, storage, veritas, virtus, posts)
+            val deps =
+                BrowserApiDependencies(identity, node, storage, veritas, virtus, karma, posts, karmaAnchorCache)
             val httpEngine =
                 embeddedServer(Netty, port = httpPort, host = httpHost) {
                     installBrowserApi(deps)
@@ -148,7 +179,19 @@ class BrowserServer private constructor(
                 }
 
             logger.info { "BrowserServer listening on http://$httpHost:$boundPort (peer ${node.peerId.toBase58()})" }
-            return BrowserServer(identity, node, storage, pubsub, veritas, virtus, posts, httpEngine, boundPort)
+            return BrowserServer(
+                identity,
+                node,
+                storage,
+                pubsub,
+                veritas,
+                virtus,
+                karma,
+                karmaAnchorCache,
+                posts,
+                httpEngine,
+                boundPort,
+            )
         }
     }
 }

@@ -19,6 +19,7 @@ dependencies {
     implementation(project(":lapis-net-storage"))
     implementation(project(":lapis-net-trust"))
     implementation(project(":lapis-net-virtus"))
+    implementation(project(":lapis-net-karma"))
 
     implementation(rootProject.libs.ktor.server.core)
     implementation(rootProject.libs.ktor.server.netty)

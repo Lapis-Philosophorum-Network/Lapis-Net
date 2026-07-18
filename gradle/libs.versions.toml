@@ -12,6 +12,8 @@ nabu = "v0.8.0"
 java-cid = "v1.3.8"
 ktor = "3.5.1"
 kotlinx-serialization-json = "1.11.0"
+electrum-client = "0.3.0"
+bitcoin-kmp = "0.31.0"
 
 [libraries]
 jvm-libp2p = { group = "io.libp2p", name = "jvm-libp2p", version.ref = "jvm-libp2p" }
@@ -32,6 +34,8 @@ ktor-server-status-pages = { group = "io.ktor", name = "ktor-server-status-pages
 ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json-jvm", version.ref = "ktor" }
 ktor-server-test-host = { group = "io.ktor", name = "ktor-server-test-host-jvm", version.ref = "ktor" }
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json-jvm", version.ref = "kotlinx-serialization-json" }
+electrum-client = { group = "net.osslabz", name = "electrum-client", version.ref = "electrum-client" }
+bitcoin-kmp = { group = "fr.acinq.bitcoin", name = "bitcoin-kmp-jvm", version.ref = "bitcoin-kmp" }
 
 [plugins]
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }

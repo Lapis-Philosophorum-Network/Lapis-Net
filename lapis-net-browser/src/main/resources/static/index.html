@@ -40,6 +40,7 @@
     <summary>What do the badges next to each post mean?</summary>
     <p><strong>Credibility</strong> shows how much <em>you</em> — through people you trust, and people they trust — can vouch for this author. "Unrated" means you have no trust path to them yet. It does not mean they are distrusted.</p>
     <p><strong>Boost</strong> shows how many sats other people have spent to promote this post. It fades over time, and is usually zero right now since boosting isn't fully wired up yet.</p>
+    <p><strong>Karma</strong> shows how much the people <em>you</em> trust have liked this post — a stranger's like counts for nothing to you, only people on your own trust graph move this number. Liking a post is also a public, signed statement under your own identity, not an anonymous click.</p>
   </details>
 
   <section id="timeline-controls">
@@ -64,6 +65,12 @@
     </div>
     <p class="timeline-text"></p>
     <div class="timeline-ltr"></div>
+    <div class="timeline-karma-row">
+      <span class="timeline-karma"></span>
+      <button type="button" class="timeline-like-button btn-secondary">&hearts; Like</button>
+      <span class="timeline-like-status"></span>
+    </div>
+    <p class="karma-like-notice">Public, signed under your identity.</p>
     <details class="trust-form-details">
       <summary>Rate this person's trustworthiness</summary>
       <p class="trust-form-notice">This is a public, signed statement under your own identity. You're accountable for this judgment — not for what they do afterward.</p>

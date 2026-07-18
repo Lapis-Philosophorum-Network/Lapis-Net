@@ -2,13 +2,16 @@ package net.lapisphilosophorum.lapisnet.browser
 
 import io.ipfs.cid.Cid
 import net.lapisphilosophorum.lapisnet.identity.Secp256k1PublicKey
+import net.lapisphilosophorum.lapisnet.karma.KarmaVote
 import net.lapisphilosophorum.lapisnet.trust.TrustGraph
 import net.lapisphilosophorum.lapisnet.virtus.LtrRecord
 import net.lapisphilosophorum.lapisnet.virtus.LtrWeightCalculator
 
 /**
  * Combines Veritas trust-graph credibility ([CredibilityCalculator]) and Virtus/LTR sort-weight
- * ([LtrWeightCalculator]) into a sorted, filterable browser timeline.
+ * ([LtrWeightCalculator]) into a sorted, filterable browser timeline. Also attaches a personalized
+ * Karma score ([KarmaScoring]) to each entry - see [build]'s doc comment for why that attachment is
+ * deliberately display-only and never affects sort order or filtering.
  */
 object TimelineBuilder {
     /** UI-POLICY default, deliberately NOT a protocol constant: 25% - below this resolved
@@ -38,6 +41,20 @@ object TimelineBuilder {
      * Sorted by [TimelineEntry.ltrWeightMsat] descending, then by
      * [TimelineEntry.publishedAtEpochSeconds] descending (most recent first) as a tie-break for
      * zero-weight (or equal-weight) posts.
+     *
+     * **[karmaVotesByCid]/[karmaVotesByVoter] feed [TimelineEntry.karmaScore]/[TimelineEntry.karmaVoteCount] -
+     * deliberately additive/display-only, NEVER folded into [filteredOut] or the sort order above.**
+     * The fach-spec's original vision for Karma is as a trust-network "bridge" - letting Karma
+     * surface content from beyond a viewer's direct/transitive trust graph. Implementing that for
+     * real would require a default-private-timeline mode this [TimelineBuilder] does not have yet:
+     * today every candidate is shown regardless of any trust relationship to its author (see
+     * [CredibilityLevel]'s doc comment on the bootstrap design this rests on) - only a `RESOLVED`
+     * score below [TimelineOptions.credibilityFilterThresholdMicros] gets filtered, and Karma has
+     * no role in that decision at all. Building real Karma-driven bridging would mean redesigning
+     * an already-shipped, twice-reviewed component's core filtering/sorting contract - deliberately
+     * out of scope for this wave. This is a NAMED, deliberate scope narrowing, not an oversight -
+     * a future wave that wants real Karma-driven bridging must design that filtering/sorting change
+     * explicitly, not assume [karmaScore] already secretly influences anything here.
      */
     fun build(
         graph: TrustGraph,
@@ -45,6 +62,8 @@ object TimelineBuilder {
         candidates: List<TimelineCandidate>,
         ltrRecordsByCid: Map<Cid, List<LtrRecord>>,
         options: TimelineOptions = TimelineOptions(),
+        karmaVotesByCid: Map<Cid, List<KarmaVote>> = emptyMap(),
+        karmaVotesByVoter: (Secp256k1PublicKey) -> List<KarmaVote> = { emptyList() },
     ): List<TimelineEntry> {
         val entries =
             candidates.map { candidate ->
@@ -57,6 +76,15 @@ object TimelineBuilder {
                     )
                 val records = ltrRecordsByCid[candidate.cid] ?: emptyList()
                 val ltrWeightMsat = LtrWeightCalculator.accumulatedWeightMsat(records, options.atEpochSeconds)
+
+                val karmaVotes = karmaVotesByCid[candidate.cid] ?: emptyList()
+                val karmaScore =
+                    KarmaScoring.personalizedKarmaForTarget(
+                        votesForTarget = karmaVotes,
+                        votesByVoter = karmaVotesByVoter,
+                        graph = graph,
+                        localIdentity = localIdentity,
+                    )
 
                 // A NO_PATH candidate is NEVER filtered by the credibility threshold below - only a
                 // RESOLVED score that's genuinely too low is. This branch is written out explicitly
@@ -77,6 +105,8 @@ object TimelineBuilder {
                     credibility = credibility,
                     ltrWeightMsat = ltrWeightMsat,
                     ltrRecordCount = records.size,
+                    karmaScore = karmaScore,
+                    karmaVoteCount = karmaVotes.size,
                     filteredOut = filteredOut,
                 )
             }

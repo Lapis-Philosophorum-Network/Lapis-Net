@@ -14,6 +14,10 @@ import io.ktor.server.testing.testApplication
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.lapisphilosophorum.lapisnet.identity.DualKeyIdentity
+import net.lapisphilosophorum.lapisnet.identity.Secp256k1PublicKey
+import net.lapisphilosophorum.lapisnet.karma.BitcoinTimeAnchorSource
+import net.lapisphilosophorum.lapisnet.karma.KarmaGossip
+import net.lapisphilosophorum.lapisnet.karma.TimeAnchorLookupResult
 import net.lapisphilosophorum.lapisnet.networking.GossipPubSub
 import net.lapisphilosophorum.lapisnet.networking.LapisNode
 import net.lapisphilosophorum.lapisnet.storage.NabuStorage
@@ -40,7 +44,9 @@ private class TestHarness(
     val pubsub: GossipPubSub
     val veritas: VeritasGossip
     val virtus: LtrGossip
+    val karma: KarmaGossip
     val posts: PostAnnouncementGossip
+    val karmaAnchorCache: KarmaAnchorCache
     val deps: BrowserApiDependencies
 
     init {
@@ -49,18 +55,44 @@ private class TestHarness(
         pubsub = GossipPubSub.attach(node)
         veritas = VeritasGossip.attach(pubsub, storage)
         virtus = LtrGossip.attach(pubsub, storage)
+        karma = KarmaGossip.attach(pubsub, storage)
         posts = PostAnnouncementGossip.attach(pubsub, storage)
-        deps = BrowserApiDependencies(identity, node, storage, veritas, virtus, posts)
+        // NoAnchorSource: no real network I/O, always resolves NotFound - exactly what a fresh
+        // test identity with no real Bitcoin history should resolve to (NoAnchorClaim), mirroring
+        // KarmaAnchorCache's own doc comment on that being the correct, non-error outcome.
+        karmaAnchorCache = KarmaAnchorCache(NoAnchorSource)
+        deps = BrowserApiDependencies(identity, node, storage, veritas, virtus, karma, posts, karmaAnchorCache)
     }
 
     fun stop() {
         posts.stop()
+        karma.stop()
         virtus.stop()
         veritas.stop()
         pubsub.stop()
         storage.stop()
         runCatching { node.stop() }
     }
+}
+
+/** A [BitcoinTimeAnchorSource] that always reports "not found", with zero real network I/O - the
+ * test-harness default for every test in this file that doesn't specifically exercise Karma
+ * anchor-resolution failure handling. */
+private object NoAnchorSource : BitcoinTimeAnchorSource {
+    override fun findFirstOutgoingTransaction(pubkey: Secp256k1PublicKey): TimeAnchorLookupResult =
+        TimeAnchorLookupResult.NotFound
+
+    override fun currentChainTipHeight(): Int = 0
+}
+
+/** A [BitcoinTimeAnchorSource] that always reports [TimeAnchorLookupResult.LookupFailed] - used to
+ * exercise `POST /api/karma`'s graceful-failure path (a 502, never an uncaught exception) without
+ * any real network I/O. */
+private object FailingAnchorSource : BitcoinTimeAnchorSource {
+    override fun findFirstOutgoingTransaction(pubkey: Secp256k1PublicKey): TimeAnchorLookupResult =
+        TimeAnchorLookupResult.LookupFailed("simulated Electrum failure")
+
+    override fun currentChainTipHeight(): Int = throw IllegalStateException("simulated Electrum failure")
 }
 
 class BrowserApiRoutingTest :
@@ -251,6 +283,110 @@ class BrowserApiRoutingTest :
                 }
             } finally {
                 harness.stop()
+            }
+        }
+
+        test("POST /api/karma on a real post succeeds and is reflected in /api/timeline's karmaVoteCount") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val postResponse =
+                        client.post("/api/posts") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(NewPostRequest("a post to like")))
+                        }
+                    val posted = json.decodeFromString<NewPostResponse>(postResponse.bodyAsText())
+
+                    val karmaResponse =
+                        client.post("/api/karma") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(NewKarmaVoteRequest(posted.cid)))
+                        }
+                    karmaResponse.status shouldBe HttpStatusCode.OK
+                    val karmaBody = json.decodeFromString<NewKarmaVoteResponse>(karmaResponse.bodyAsText())
+                    karmaBody.targetCid shouldBe posted.cid
+                    karmaBody.karmaVoteCount shouldBe 1
+
+                    val timeline = client.get("/api/timeline")
+                    val entries = json.decodeFromString<List<TimelinePostResponse>>(timeline.bodyAsText())
+                    val entry = entries.single { it.cid == posted.cid }
+                    entry.karmaVoteCount shouldBe 1
+                    // NoAnchorSource (this harness's fake BitcoinTimeAnchorSource) always resolves
+                    // NoAnchorClaim, which KarmaWeightCalculator always scores as exactly 0.0 - see
+                    // that object's doc comment. This assertion is the structural proof the vote
+                    // round-tripped through real signing/gossip/indexing, not a claim about a
+                    // nonzero score (which would require a real ChainAnchorClaim).
+                    entry.karmaScore shouldBe 0.0
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/karma with a malformed targetCid returns 400, not a crash") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val response =
+                        client.post("/api/karma") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(NewKarmaVoteRequest("not-a-real-cid")))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    val body = json.decodeFromString<ErrorResponse>(response.bodyAsText())
+                    body.error.isNotBlank() shouldBe true
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/karma returns 502, not a crash, when the identity's time anchor cannot be resolved") {
+            val identity = DualKeyIdentity.generate()
+            val node = LapisNode.create(identity)
+            node.start(bootstrapPeers = emptyList())
+            val storage = NabuStorage.attach(node, Files.createTempDirectory("browser-api-routing-test-failing"))
+            val pubsub = GossipPubSub.attach(node)
+            val veritas = VeritasGossip.attach(pubsub, storage)
+            val virtus = LtrGossip.attach(pubsub, storage)
+            val karma = KarmaGossip.attach(pubsub, storage)
+            val posts = PostAnnouncementGossip.attach(pubsub, storage)
+            val karmaAnchorCache = KarmaAnchorCache(FailingAnchorSource)
+            val deps = BrowserApiDependencies(identity, node, storage, veritas, virtus, karma, posts, karmaAnchorCache)
+            try {
+                testApplication {
+                    application { installBrowserApi(deps) }
+
+                    val postResponse =
+                        client.post("/api/posts") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(NewPostRequest("a post that cannot be liked")))
+                        }
+                    val posted = json.decodeFromString<NewPostResponse>(postResponse.bodyAsText())
+
+                    val response =
+                        client.post("/api/karma") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(NewKarmaVoteRequest(posted.cid)))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadGateway
+                    val body = json.decodeFromString<ErrorResponse>(response.bodyAsText())
+                    body.error.isNotBlank() shouldBe true
+                }
+            } finally {
+                posts.stop()
+                karma.stop()
+                virtus.stop()
+                veritas.stop()
+                pubsub.stop()
+                storage.stop()
+                runCatching { node.stop() }
             }
         }
 

@@ -81,6 +81,17 @@ function ltrWeightText(post) {
   return `Boosted ${sats} sats by ${post.ltrRecordCount} supporter${post.ltrRecordCount === 1 ? "" : "s"}`;
 }
 
+// Pairs the raw number with a plain word, matching ltrWeightText()'s/credibilityBadgeText()'s
+// established convention (e.g. "Trusted · 62%", "Boosted 2.50 sats by 3 supporters") - never a
+// bare float. karmaScore is a personalized, Veritas-weighted number (see the server-side
+// KarmaScoring doc comment) - it can legitimately be 0 even with real likes (e.g. from voters you
+// have no trust path to), so it is shown alongside the raw like count, not instead of it.
+function karmaText(post) {
+  if (post.karmaVoteCount === 0) return "No likes yet";
+  const likeWord = post.karmaVoteCount === 1 ? "like" : "likes";
+  return `♥ ${post.karmaVoteCount} ${likeWord} · Karma ${post.karmaScore.toFixed(2)}`;
+}
+
 // Flashes [element] briefly to give felt confirmation that an action (posting, rating)
 // succeeded, instead of a silent state swap - see the UI/UX design review's "Duarte" note.
 function flashItem(element) {
@@ -115,6 +126,38 @@ function renderTimelineItem(post) {
   li.querySelector(".timeline-timestamp").textContent = formatRelativeTime(post.publishedAtEpochSeconds);
   li.querySelector(".timeline-text").textContent = post.text;
   li.querySelector(".timeline-ltr").textContent = ltrWeightText(post);
+
+  // Karma is visually and structurally its own row, separate from the credibility badge above -
+  // it never implies sort order or truth, only a personalized like count/score (see the
+  // server-side KarmaScoring doc comment). Kept as a persistently-visible one-click control
+  // (never behind a collapsed <details>, unlike the trust-rating form below), matching the
+  // fach-spec's "one click" design for a like.
+  const karmaEl = li.querySelector(".timeline-karma");
+  const likeButton = li.querySelector(".timeline-like-button");
+  const likeStatus = li.querySelector(".timeline-like-status");
+  karmaEl.textContent = karmaText(post);
+
+  likeButton.addEventListener("click", async () => {
+    likeButton.disabled = true;
+    likeStatus.textContent = "liking…";
+    try {
+      await fetchJson("/api/karma", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targetCid: post.cid }),
+      });
+      likeStatus.textContent = "liked";
+      // Reuses the same flashItem/lapis-flash animation as posting/rating, for felt confirmation -
+      // see flashItem's doc comment. loadTimeline() wipes and rebuilds the whole list immediately
+      // after, so the pause below keeps the flash from being cut off.
+      flashItem(li);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await loadTimeline();
+    } catch (error) {
+      likeStatus.textContent = `failed: ${error.message}`;
+      likeButton.disabled = false;
+    }
+  });
 
   const badge = li.querySelector(".timeline-credibility-badge");
   badge.textContent = credibilityBadgeText(post);

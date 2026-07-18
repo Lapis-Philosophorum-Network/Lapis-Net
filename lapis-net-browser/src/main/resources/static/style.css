@@ -187,6 +187,39 @@ ul#timeline-list {
   font-size: 0.85rem;
 }
 
+/* Karma is its own row, visually and structurally separate from the credibility badge and the
+   LTR-boost line above - it never implies sort order or truth, only a personalized like
+   count/score. See KarmaScoring's server-side doc comment and TimelineBuilder.build's doc
+   comment on why Karma is deliberately display-only in this wave. */
+.timeline-karma-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+
+.timeline-karma {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.timeline-like-status {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+/* Always-visible reminder that liking is a public, signed statement - unlike .trust-form-notice
+   (which lives inside a collapsed <details> the user must expand to act), the Like button itself
+   has no such gate, so this notice sits in the always-rendered row instead of behind a disclosure.
+   Kept short (unlike the fuller sentence in #score-explainer's FAQ) since it is shown on every
+   single timeline item, not opened deliberately once. */
+.karma-like-notice {
+  margin: 0.2rem 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  line-height: 1.3;
+}
+
 .credibility-badge {
   display: inline-flex;
   align-items: center;

@@ -1,6 +1,7 @@
 package net.lapisphilosophorum.lapisnet.browser
 
 import io.github.oshai.kotlinlogging.KotlinLogging
+import io.ipfs.cid.Cid
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -18,6 +19,9 @@ import io.libp2p.core.multiformats.Multiaddr
 import kotlinx.serialization.Serializable
 import net.lapisphilosophorum.lapisnet.identity.DualKeyIdentity
 import net.lapisphilosophorum.lapisnet.identity.Secp256k1PublicKey
+import net.lapisphilosophorum.lapisnet.karma.KarmaGossip
+import net.lapisphilosophorum.lapisnet.karma.KarmaVote
+import net.lapisphilosophorum.lapisnet.karma.KarmaVoteCodec
 import net.lapisphilosophorum.lapisnet.networking.LapisNode
 import net.lapisphilosophorum.lapisnet.storage.NabuStorage
 import net.lapisphilosophorum.lapisnet.trust.MAX_TRUST_MICROS
@@ -50,6 +54,8 @@ data class TimelinePostResponse(
     val credibilityScoreMicros: Int,
     val ltrWeightMsat: Double,
     val ltrRecordCount: Int,
+    val karmaScore: Double,
+    val karmaVoteCount: Int,
 )
 
 @Serializable
@@ -60,6 +66,17 @@ data class NewPostRequest(
 @Serializable
 data class NewPostResponse(
     val cid: String,
+)
+
+@Serializable
+data class NewKarmaVoteRequest(
+    val targetCid: String,
+)
+
+@Serializable
+data class NewKarmaVoteResponse(
+    val targetCid: String,
+    val karmaVoteCount: Int,
 )
 
 @Serializable
@@ -117,7 +134,9 @@ class BrowserApiDependencies(
     val storage: NabuStorage,
     val veritas: VeritasGossip,
     val virtus: LtrGossip,
+    val karma: KarmaGossip,
     val posts: PostAnnouncementGossip,
+    val karmaAnchorCache: KarmaAnchorCache,
 )
 
 /**
@@ -177,6 +196,10 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
                 tracked.associate { indexed ->
                     indexed.cid to deps.virtus.currentRecords(indexed.cid, PLACEHOLDER_VIEW_ID)
                 }
+            val karmaVotesByCid =
+                tracked.associate { indexed ->
+                    indexed.cid to deps.karma.currentVotesForTarget(indexed.cid)
+                }
 
             val entries =
                 TimelineBuilder.build(
@@ -184,6 +207,8 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
                     localIdentity = deps.identity.secp256k1KeyPair.publicKey,
                     candidates = candidates,
                     ltrRecordsByCid = ltrRecordsByCid,
+                    karmaVotesByCid = karmaVotesByCid,
+                    karmaVotesByVoter = deps.karma::currentVotesByVoter,
                 )
             val visible = TimelineBuilder.visible(entries, includeFilteredContent = includeFiltered)
 
@@ -212,6 +237,8 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
                         credibilityScoreMicros = entry.credibility.scoreMicros,
                         ltrWeightMsat = entry.ltrWeightMsat,
                         ltrRecordCount = entry.ltrRecordCount,
+                        karmaScore = entry.karmaScore,
+                        karmaVoteCount = entry.karmaVoteCount,
                     )
                 }
             call.respond(response)
@@ -230,6 +257,38 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
             val announcement = PostAnnouncement.create(deps.identity.secp256k1KeyPair, bytes)
             val cid = deps.posts.announce(announcement)
             call.respond(NewPostResponse(cid.toString()))
+        }
+
+        post("/api/karma") {
+            val request = call.receive<NewKarmaVoteRequest>()
+            val targetCid = parseCidOrNull(request.targetCid)
+            if (targetCid == null) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("targetCid is not a valid CID"))
+                return@post
+            }
+            // Resolves (or lazily populates, on this identity's first-ever vote) this node's own
+            // Bitcoin time anchor - a real, client-side Electrum lookup, never a chain call in the
+            // gossip path (see KarmaGossip's doc comment). KarmaAnchorResolutionException covers
+            // every real failure mode (LookupFailed, a chain-tip query failure, an inconsistent
+            // cached genesis/tip pair) - caught here so a transient Electrum outage degrades to a
+            // clean 502 response, never an uncaught exception (the installed StatusPages handler
+            // would also catch it, but a dedicated response here gives the caller a clearer,
+            // Karma-specific error message than the generic "internal server error" fallback).
+            val timeAnchor =
+                try {
+                    deps.karmaAnchorCache.currentClaimFor(deps.identity.secp256k1KeyPair)
+                } catch (e: KarmaAnchorResolutionException) {
+                    logger.warn(e) { "failed to resolve time anchor for a Karma vote" }
+                    call.respond(
+                        HttpStatusCode.BadGateway,
+                        ErrorResponse("failed to resolve this identity's Bitcoin time anchor: ${e.message}"),
+                    )
+                    return@post
+                }
+            val vote = KarmaVote.create(deps.identity.secp256k1KeyPair, targetCid, timeAnchor)
+            deps.karma.announce(vote)
+            val karmaVoteCount = deps.karma.currentVotesForTarget(targetCid).size
+            call.respond(NewKarmaVoteResponse(targetCid = targetCid.toString(), karmaVoteCount = karmaVoteCount))
         }
 
         post("/api/trust") {
@@ -311,3 +370,21 @@ private fun parseHexPublicKeyOrNull(hex: String): Secp256k1PublicKey? {
 private val HEX_CHARS = "0123456789abcdefABCDEF"
 
 private fun ByteArray.toHexString(): String = joinToString("") { "%02x".format(it) }
+
+/** Cheap upper bound on an incoming CID string's length, checked BEFORE it ever reaches
+ * [Cid.decode] - mirrors [parseHexPublicKeyOrNull]'s exact-length precondition check, just looser
+ * since a base-encoded (base32/base58/etc.) CID string has no single exact length the way a fixed
+ * 33-byte hex public key does. Derived from
+ * [net.lapisphilosophorum.lapisnet.karma.KarmaVoteCodec.MAX_CID_BYTES] (128 raw bytes) with a
+ * generous 4x multiplier to cover multibase encoding expansion (base32 ~1.6x, base58btc ~1.37x,
+ * plus a multibase prefix character) - not a tight bound, just enough headroom to reject an
+ * obviously-oversized string before wasting decode work on it. */
+private val MAX_CID_STRING_LENGTH = KarmaVoteCodec.MAX_CID_BYTES * 4
+
+/** Parses [value] as a [Cid], or `null` for any malformed input - never throws, so route handlers
+ * can turn this straight into a 400 response instead of crashing, mirroring
+ * [parseHexPublicKeyOrNull]'s established pattern for this file. */
+private fun parseCidOrNull(value: String): Cid? {
+    if (value.length > MAX_CID_STRING_LENGTH) return null
+    return runCatching { Cid.decode(value) }.getOrNull()
+}
