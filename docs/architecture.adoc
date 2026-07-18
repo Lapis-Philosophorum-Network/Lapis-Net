@@ -2,12 +2,13 @@
 
 == Status
 
-V0.1.7: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
-content storage via Nabu (V0.1.4), the Veritas trust-edge grant data model
-(V0.1.5), the Veritas transitive trust path-selection algorithm (V0.1.6), and
-GossipSub propagation + Nabu persistence of Veritas grants (V0.1.7, see below)
-are implemented. Remaining modules are still skeletons. This document grows
-as modules gain real implementations.
+V0.1.8 (V0.1 milestone complete): identity layer (V0.1.2), P2P node bootstrap
+(V0.1.3), DHT + Bitswap content storage via Nabu (V0.1.4), the Veritas
+trust-edge grant data model (V0.1.5), the Veritas transitive trust
+path-selection algorithm (V0.1.6), GossipSub propagation + Nabu persistence
+of Veritas grants (V0.1.7), and a multi-node CLI demo proving the full stack
+end to end (V0.1.8, see below) are implemented. Remaining modules are still
+skeletons. This document grows as modules gain real implementations.
 
 == Layering
 
@@ -37,7 +38,8 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   see below) are all implemented
 * `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
-* `lapis-net-cli` — entry point / demo harness
+* `lapis-net-cli` — entry point / demo harness, including the multi-node trust-propagation demo
+  (V0.1.8, see below)
 
 == Identity (V0.1.2)
 
@@ -387,6 +389,57 @@ locally for tests:
   bounds whether a durable disk copy gets written. A grant that clears the persistence cap still gets
   indexed and still propagates — this node's own disk budget has no bearing on trust-view correctness
   or mesh-wide convergence, since neither ever reads from disk.
+
+== CLI / multi-node demo (V0.1.8)
+
+`lapis-net-cli`'s `main()` runs two demos in sequence: `runIdentityAndStorageDemo()` (V0.1.4-era
+single-node identity + local storage round-trip, unchanged in substance, only extracted into its own
+function this wave) and `runMultiNodeTrustPropagationDemo()` — new this wave, the first piece of code
+in the repository that exercises the full V0.1.2-V0.1.7 stack together in one running scenario rather
+than each module's own isolated test suite.
+
+**Topology.** Three in-process nodes are chained `A<->B<->C`; `A` and `C` are never directly dialed,
+deliberately mirroring `ThreeNodeVeritasGossipRelayTest`'s topology (chosen there, and reused here,
+specifically because it proves GossipSub *relay* through an intermediate node, not just direct
+delivery). Node `A` issues a Veritas trust-edge grant to node `C`'s own secp256k1 identity; the grant
+is gossiped through relay node `B` and resolved into a trust score on node `C`.
+
+**Network hops vs. trust-graph hops.** The demo explicitly narrates a distinction that is easy to
+conflate: the grant travels the network as 2 hops (`A->B->C`), but `TrustPathFinder`'s resolved trust
+path is 1 hop (`A->C` directly) — the grant is a single signed `A->C` statement, and `B` only relays
+the bytes; it never becomes a node in the trust graph itself. The test suite (below) pins this
+distinction with an exact assertion (`hops shouldBe 1`), not just "didn't throw".
+
+**Warm-up phase.** Before the real grant-announce round, the demo runs a disposable warm-up topic
+where every message always validates `Valid`, so retried payloads keep getting relayed by `B`
+regardless of duplicate content — unlike the real Veritas topic's content-addressed dedup. This is
+not optional: skipping it makes the 3-node case flaky in a way a 2-node case never is, because grant
+dedup means a lost mesh-formation race is not recoverable by simply retrying identical grant bytes.
+See `ThreeNodeVeritasGossipRelayTest`'s class doc comment for the full mechanism this mirrors.
+
+**Bounded polling throughout, no fixed sleeps.** Both the warm-up phase and the grant-propagation
+phase poll against a single deadline computed once at function entry and shared across both phases,
+rather than each phase independently claiming its own full timeout budget.
+
+**Test coverage.** `MultiNodeTrustPropagationDemoTest` calls `runMultiNodeTrustPropagationDemo()`
+directly (bypassing `main()`'s console output) and asserts real correctness: exact grant convergence
+across all three nodes' local views (`grantsOnA`/`grantsOnB`/`grantsOnC` each equal to the single
+issued grant), the exact resolved `scoreMicros`, and the `hops shouldBe 1` distinction above.
+
+**Review note on resource cleanup.** The nine `veritas*/pubsub*/storage*.stop()` calls run
+sequentially just before `return result`, not duplicated in the `finally` block alongside the three
+`node.stop()` calls. This was flagged and traced through review: all three types' `stop()` are
+no-ops or purely in-memory today, and `node.stop()` (already in `finally`) unconditionally tears down
+the actual bound `Host`/socket regardless of whether the nine calls are reached — so no real leak
+exists on an early-exception path, and a nullable-`var` restructuring to defensively cover a already
+provably-harmless path was deliberately not made.
+
+This wave's review and security audit both approved with only this one minor/cosmetic finding — no
+fix round was needed beyond the explanatory comment described above.
+
+With V0.1.8 landed, the V0.1 milestone (identity, node bootstrap, Nabu storage, Veritas trust model,
+trust path-selection, gossip propagation + persistence, and now a demonstrated end-to-end scenario)
+is complete.
 
 == Diagrams
 

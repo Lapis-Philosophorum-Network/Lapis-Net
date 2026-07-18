@@ -35,8 +35,8 @@ edges between local nodes.
 
 == Progress
 
-V0.1.1 through V0.1.7 are implemented (see `docs/architecture.adoc` for
-details). V0.1.8 (minimal CLI/test harness) is next.
+V0.1.1 through V0.1.8 are implemented (see `docs/architecture.adoc` for
+details). **The V0.1 milestone is complete.**
 
 After V0.1: content publishing via `LtrRecord` (on-chain first, for easier
 testing), then a pilot with a small group (PdV, Girchi, libertarian
