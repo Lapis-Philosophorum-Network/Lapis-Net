@@ -1,4 +1,6 @@
-= Lapis Net V0.1 Roadmap
+= Lapis Net Roadmap
+
+== V0.1 — Protocol core + Veritas
 
 Target: first runnable prototype — network bootstrap plus Veritas (the first
 of the four scoring dimensions), including GossipSub propagation of trust
@@ -33,11 +35,36 @@ edges between local nodes.
 | Minimal CLI / test harness: demo with N local nodes, trust-edge issuance and propagation made visible.
 |===
 
-== Progress
+=== Progress
 
 V0.1.1 through V0.1.8 are implemented (see `docs/architecture.adoc` for
 details). **The V0.1 milestone is complete.**
 
-After V0.1: content publishing via `LtrRecord` (on-chain first, for easier
-testing), then a pilot with a small group (PdV, Girchi, libertarian
-scene) — see V0.2 planning once V0.1 is complete.
+== V0.2 — Virtus + Minimal-Browser
+
+Target: the second of four scoring dimensions — Virtus (the LTR/on-chain
+economy) — plus a Minimal-Browser that makes Veritas and Virtus data
+actually visible. The browser is deliberately placed here rather than as a
+standalone later wave, so a real pilot test (PdV, Girchi) is possible as
+soon as V0.2 lands, instead of only after every scoring dimension exists.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.2.1
+| Virtus/LTR core (on-chain): `LtrRecord` data model, GossipSub propagation
++ Nabu persistence (mirroring the Veritas V0.1.5/V0.1.7 pattern), 10%/24h
+decay math, accumulation (independent records per (cid, view) pair, never
+merged). Structural-only `OnChainProof` — no live Bitcoin chain
+verification yet (known, documented limitation).
+
+| V0.2.2
+| Minimal-Browser (MVP): shows Veritas score + Virtus/LTR-weighted sorting
+for a timeline. Tech-stack choice is part of that wave's own planning step.
+|===
+
+=== Progress
+
+V0.2.1 is implemented (see `docs/architecture.adoc`'s "Virtus: LTR core
+(V0.2.1)" section). V0.2.2 (Minimal-Browser) is next.

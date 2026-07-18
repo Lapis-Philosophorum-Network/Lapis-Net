@@ -2,13 +2,15 @@
 
 == Status
 
-V0.1.8 (V0.1 milestone complete): identity layer (V0.1.2), P2P node bootstrap
-(V0.1.3), DHT + Bitswap content storage via Nabu (V0.1.4), the Veritas
-trust-edge grant data model (V0.1.5), the Veritas transitive trust
-path-selection algorithm (V0.1.6), GossipSub propagation + Nabu persistence
-of Veritas grants (V0.1.7), and a multi-node CLI demo proving the full stack
-end to end (V0.1.8, see below) are implemented. Remaining modules are still
-skeletons. This document grows as modules gain real implementations.
+V0.2.1: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
+content storage via Nabu (V0.1.4), the Veritas trust-edge grant data model
+(V0.1.5), the Veritas transitive trust path-selection algorithm (V0.1.6),
+GossipSub propagation + Nabu persistence of Veritas grants (V0.1.7), a
+multi-node CLI demo proving the full V0.1 stack end to end (V0.1.8 — V0.1
+milestone complete), and the Virtus/LTR data model with GossipSub
+propagation + Nabu persistence (V0.2.1, see below) are implemented.
+Remaining modules are still skeletons. This document grows as modules gain
+real implementations.
 
 == Layering
 
@@ -36,6 +38,9 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (V0.1.5), the transitive
   trust path-selection algorithm (V0.1.6), and GossipSub propagation + Nabu persistence (V0.1.7,
   see below) are all implemented
+* `lapis-net-virtus` — Virtus/LTR economy: signed, accumulating `LtrRecord` claims with GossipSub
+  propagation + Nabu persistence and pure decay math (V0.2.1, see below) — a sibling scoring
+  dimension to Veritas, not built on top of it (see Layering above)
 * `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness, including the multi-node trust-propagation demo
@@ -440,6 +445,77 @@ fix round was needed beyond the explanatory comment described above.
 With V0.1.8 landed, the V0.1 milestone (identity, node bootstrap, Nabu storage, Veritas trust model,
 trust path-selection, gossip propagation + persistence, and now a demonstrated end-to-end scenario)
 is complete.
+
+== Virtus: LTR core (V0.2.1)
+
+`lapis-net-virtus` is the second of the four scoring dimensions (Layering above), and the first
+milestone of V0.2. Its data model, `LtrRecord` — a payer-signed claim binding an on-chain OP_RETURN
+Bitcoin payment to a `(cid, viewId)` pair — is deliberately a **sibling** to `lapis-net-trust`'s
+`VeritasGrant`, not built on top of it: the module has no dependency on `lapis-net-trust`, and the
+two are structurally different in the one way that matters most. A Veritas grant forms a
+per-`(truster, target)` version chain that gets resolved to one latest edge; an LTR record for the
+same `(cid, viewId)` **accumulates independently and is never resolved to one** — every boost is
+kept, per the fach-spec's accumulation rule (multiple LTR payments for the same content/view are
+independent records, not a merged running total).
+
+**GossipSub propagation, Nabu persistence, and the two-cap index are carried over directly, not
+re-derived.** `LtrGossip`/`LtrRecordIndex` reuse the exact three-step validator structure and
+two-cap eviction/persistence pattern that took `lapis-net-trust`'s V0.1.7 four security-review
+rounds to land on: `canAccept()` (an evicting, LRU-style tracking cap) gates dedup, a separate,
+non-evicting `tryReservePersistence()` independently bounds disk writes, and reaching the
+persistence cap does **not** decline the underlying gossip message — a record still gets indexed
+into the live trust/economy view even when it can't be persisted to disk. Both this wave's
+independent code review and its independent security audit specifically verified the carried-over
+pattern reproduces the *hardened* (post-fix) Veritas behavior, not an earlier, since-corrected
+shape — this is the primary reason `lapis-net-virtus` shipped with no critical/major security
+findings in its first review round.
+
+**The `nonce` field is not in the fach-spec's literal schema — an engineering addition, documented
+as such.** ECDSA signing here is deterministic (RFC 6979): the same digest signed with the same key
+always produces the same signature. Because accumulation means two genuinely independent boosts —
+same payer, same `cid`/`viewId`/amount, landing in the same wall-clock second — are both supposed to
+be kept, they would otherwise encode to byte-identical records and the second would be silently
+discarded by content-id dedup as if it were merely a gossip replay of the first, permanently losing
+one real boost's economic weight. An 8-byte `SecureRandom` nonce, generated fresh per `create()`
+call and included inside the signed body (so it cannot be stripped or replaced without invalidating
+the signature), closes this gap.
+
+**Decay math is `Double`, deliberately unlike Veritas's fixed-point `trustMicros` convention.**
+`LtrWeightCalculator.decayedWeightMsat()` implements the fach-spec's formula exactly:
+`initial_value × 0.9^(hours_since_timestamp / 24)`. This value is never signed, never part of any
+canonical encoded bytes, and never compared for cross-node consensus — it is a local, read-time-only
+ranking heuristic each view computes independently for its own sort order, so `Double`/`Math.pow`'s
+imprecision is the right tradeoff for a fractional exponent with no clean fixed-point form. A
+future-timestamped record (clock skew, malice, or a bug) has its elapsed-hours clamped to zero
+rather than going negative — without this clamp, a negative exponent would push the decay factor
+*above* 1.0, letting a record's weight exceed its own face value and breaking the "decay is
+monotonically non-increasing" invariant the fach-spec's own worked table assumes.
+`LtrWeightCalculator.totalInvestedMsat()`, by contrast, stays exact (`Long`, `Math.addExact`-guarded,
+throws `ArithmeticException` on overflow rather than silently wrapping) because it *is* a real
+accounting figure, not a ranking heuristic — unlike the decayed weight, it is meant to answer "how
+many sats have actually flowed to this view," where floating-point imprecision would be wrong.
+
+**Known, deliberately accepted gap: no live on-chain verification.** `OnChainProof` validates only
+that a claimed Bitcoin txid is a structurally plausible 32-byte hash and that its output index is a
+non-negative value within a defensive sanity cap — it does not verify that a transaction with that
+txid exists on-chain, that its output really pays the claimed view's address, or that its
+`OP_RETURN` output actually encodes the claimed `cid`/`viewId` pair. This has a sharper consequence
+here than the analogous gap does for Veritas: because the fach-spec's whole anti-Sybil claim for LTR
+rests on "every boost costs real sats," and this wave cannot check that a payment is real, an
+`LtrRecord` today is exactly as cheap to fabricate as a `VeritasGrant` — a malicious node can claim
+an arbitrary msat amount was paid, at zero cost, and any view that honors `LtrGossip.currentWeight()`
+or `LtrWeightCalculator.totalInvestedMsat()` today is trivially manipulable by anyone willing to run
+this code. Closing this gap is real future work (a chain-verification sub-wave, or reusing whatever
+SPV/full-node integration the Lightning wave, V0.6, ends up needing anyway) — until then, a
+browser/view that wants economically-trustworthy sorting must run its own verification layer on top
+of `LtrGossip.currentRecords()`, or knowingly accept this wave's weaker guarantee (cryptographic
+attribution to a claimed payer, no proof the payer actually paid).
+
+**No Bitcoin transaction library dependency was added this wave.** `fr.acinq.bitcoin:bitcoin-kmp-jvm`
+exists on Maven Central and its POM pins the exact `secp256k1-kmp-jvm` version already used by this
+project, so it is a safe candidate for whichever future wave actually constructs, signs, or verifies
+real Bitcoin transaction bytes — nothing in V0.2.1 parses or constructs transaction bytes, so adding
+the dependency now would be unused weight.
 
 == Diagrams
 
