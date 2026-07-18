@@ -9,4 +9,5 @@ include(
     "lapis-net-networking",
     "lapis-net-test",
     "lapis-net-cli",
+    "lapis-net-browser",
 )

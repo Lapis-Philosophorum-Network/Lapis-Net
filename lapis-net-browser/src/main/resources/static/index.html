@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lapis Net - Minimal Browser</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header id="identity-header">
+  <h1>Lapis Net</h1>
+  <div id="identity-info">
+    <span id="identity-fingerprint">loading identity&hellip;</span>
+  </div>
+  <div id="peer-panel">
+    <span id="peer-count">0 peers</span>
+    <form id="connect-form">
+      <input type="text" id="connect-multiaddr" placeholder="/ip4/127.0.0.1/tcp/1234/p2p/Qm..." />
+      <button type="submit">Connect</button>
+    </form>
+    <span id="connect-status"></span>
+  </div>
+</header>
+
+<main>
+  <section id="compose-panel">
+    <textarea id="compose-text" maxlength="2048" placeholder="What's happening?"></textarea>
+    <div id="compose-footer">
+      <span id="compose-count">0 / 2048</span>
+      <button id="compose-submit" type="button">Post</button>
+    </div>
+    <span id="compose-status"></span>
+  </section>
+
+  <section id="timeline-controls">
+    <label>
+      <input type="checkbox" id="include-filtered" />
+      Show filtered content
+    </label>
+    <button id="refresh-button" type="button">Refresh</button>
+  </section>
+
+  <section id="timeline">
+    <ul id="timeline-list"></ul>
+  </section>
+</main>
+
+<template id="timeline-item-template">
+  <li class="timeline-item">
+    <div class="timeline-item-header">
+      <span class="timeline-author"></span>
+      <span class="timeline-credibility-badge"></span>
+      <span class="timeline-timestamp"></span>
+    </div>
+    <p class="timeline-text"></p>
+    <div class="timeline-ltr"></div>
+    <details class="trust-form-details">
+      <summary>Rate trust</summary>
+      <form class="trust-form">
+        <input type="hidden" class="trust-target" />
+        <label>
+          Trust: <span class="trust-slider-value">50%</span>
+          <input type="range" class="trust-slider" min="0" max="100" value="50" />
+        </label>
+        <input type="text" class="trust-comment" placeholder="comment (optional)" />
+        <button type="submit">Submit</button>
+        <span class="trust-status"></span>
+      </form>
+    </details>
+  </li>
+</template>
+
+<script src="/app.js"></script>
+</body>
+</html>
