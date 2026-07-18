@@ -63,7 +63,9 @@ function shortFingerprint(fingerprint) {
 function credibilityBadgeText(post) {
   if (post.credibilityLevel === "NO_PATH") return "Unrated";
   const percent = Math.round((post.credibilityScoreMicros / 1000000) * 100);
-  return `Trust ${percent}%`;
+  return post.credibilityScoreMicros >= RESOLVED_HIGH_THRESHOLD_MICROS
+    ? `Trusted · ${percent}%`
+    : `Low trust · ${percent}%`;
 }
 
 function credibilityBadgeClass(post) {
@@ -74,9 +76,17 @@ function credibilityBadgeClass(post) {
 }
 
 function ltrWeightText(post) {
-  if (post.ltrRecordCount === 0 || post.ltrWeightMsat <= 0) return "no boosts yet";
+  if (post.ltrRecordCount === 0 || post.ltrWeightMsat <= 0) return "No boosts yet";
   const sats = (post.ltrWeightMsat / 1000).toFixed(2);
-  return `${sats} sat boost (${post.ltrRecordCount} record${post.ltrRecordCount === 1 ? "" : "s"})`;
+  return `Boosted ${sats} sats by ${post.ltrRecordCount} supporter${post.ltrRecordCount === 1 ? "" : "s"}`;
+}
+
+// Flashes [element] briefly to give felt confirmation that an action (posting, rating)
+// succeeded, instead of a silent state swap - see the UI/UX design review's "Duarte" note.
+function flashItem(element) {
+  if (!element) return;
+  element.classList.add("lapis-flash");
+  element.addEventListener("animationend", () => element.classList.remove("lapis-flash"), { once: true });
 }
 
 async function loadIdentity() {
@@ -109,6 +119,11 @@ function renderTimelineItem(post) {
   const badge = li.querySelector(".timeline-credibility-badge");
   badge.textContent = credibilityBadgeText(post);
   badge.classList.add("credibility-badge", credibilityBadgeClass(post));
+  // Static, developer-authored strings only - never user/peer content - so a plain title
+  // assignment (not innerHTML) keeps the file's textContent-only XSS discipline intact.
+  badge.title = post.credibilityLevel === "NO_PATH"
+    ? "You have no trust path to this author yet - this is not a bad rating, just unknown."
+    : "How much people you trust, directly or transitively, vouch for this author, from your point of view.";
 
   const trustForm = li.querySelector(".trust-form");
   const trustTargetInput = li.querySelector(".trust-target");
@@ -137,6 +152,10 @@ function renderTimelineItem(post) {
         }),
       });
       trustStatus.textContent = "saved";
+      // loadTimeline() wipes and rebuilds the whole list immediately after - without this
+      // pause the flash animation would be cut off almost as soon as it starts.
+      flashItem(li);
+      await new Promise((resolve) => setTimeout(resolve, 500));
       await loadTimeline();
     } catch (error) {
       trustStatus.textContent = `failed: ${error.message}`;
@@ -189,6 +208,7 @@ composeSubmitButton.addEventListener("click", async () => {
     composeCountEl.textContent = `0 / ${MAX_POST_BODY_BYTES}`;
     composeStatusEl.textContent = "posted";
     await loadTimeline();
+    flashItem(timelineListEl.querySelector(".timeline-item"));
   } catch (error) {
     composeStatusEl.textContent = `failed: ${error.message}`;
   }

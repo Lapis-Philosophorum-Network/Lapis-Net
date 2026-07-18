@@ -35,9 +35,28 @@ header#identity-header {
   background: var(--panel-bg);
 }
 
+.brand {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
 header h1 {
-  font-size: 1.1rem;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin: 0;
+}
+
+#tagline {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+#identity-label {
+  color: var(--muted);
+  margin-right: 0.25rem;
 }
 
 #identity-fingerprint {
@@ -102,6 +121,27 @@ main {
   justify-content: space-between;
 }
 
+#score-explainer {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+#score-explainer summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+#score-explainer p {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 ul#timeline-list {
   list-style: none;
   margin: 0;
@@ -148,33 +188,70 @@ ul#timeline-list {
 }
 
 .credibility-badge {
-  display: inline-block;
-  padding: 0.1rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.1rem 0.55rem;
   border-radius: 999px;
   font-size: 0.75rem;
   font-weight: 600;
+  border: 1px solid transparent;
+  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
 }
 
-/* NO_PATH must always look visually distinct from a low RESOLVED score - see
-   CredibilityLevel's doc comment on why the two must never be visually conflated. */
+/* NO_PATH renders hollow (no fill, outlined, hollow-circle glyph) so it can never be
+   mistaken for a filled/resolved badge even under color-blindness or a fast skim - see
+   CredibilityLevel's doc comment on why NO_PATH and RESOLVED must never be visually
+   conflated. Shape + glyph carry the distinction, not hue alone. */
 .credibility-badge.no-path {
-  background: var(--badge-no-path-bg);
+  background: transparent;
+  border-color: var(--badge-no-path-text);
   color: var(--badge-no-path-text);
+}
+.credibility-badge.no-path::before {
+  content: "○";
 }
 
 .credibility-badge.resolved-high {
   background: var(--badge-high-bg);
+  border-color: var(--badge-high-bg);
   color: var(--badge-high-text);
+}
+.credibility-badge.resolved-high::before {
+  content: "●";
 }
 
 .credibility-badge.resolved-low {
   background: var(--badge-low-bg);
+  border-color: var(--badge-low-bg);
   color: var(--badge-low-text);
+}
+.credibility-badge.resolved-low::before {
+  content: "●";
 }
 
 .trust-form-details {
   margin-top: 0.5rem;
   font-size: 0.85rem;
+}
+
+.trust-form-notice {
+  margin: 0.35rem 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.trust-slider-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.trust-slider-min,
+.trust-slider-max {
+  font-size: 0.7rem;
+  color: var(--muted);
 }
 
 .trust-form {
@@ -197,19 +274,53 @@ button {
   border-radius: 0.375rem;
   padding: 0.4rem 0.75rem;
   cursor: pointer;
+  transition: opacity 120ms ease, transform 80ms ease;
 }
 
 button:hover {
   opacity: 0.9;
 }
 
-input[type="text"],
-input[type="range"] {
+button:active {
+  transform: scale(0.97);
+}
+
+button.btn-secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+button.btn-secondary:hover {
+  background: var(--border);
+  opacity: 1;
+}
+
+input[type="text"] {
   background: transparent;
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 0.375rem;
   padding: 0.35rem;
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+@keyframes lapis-flash {
+  0% { box-shadow: 0 0 0 2px var(--accent); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.timeline-item.lapis-flash {
+  animation: lapis-flash 900ms ease-out;
 }
 
 @media (prefers-color-scheme: light) {

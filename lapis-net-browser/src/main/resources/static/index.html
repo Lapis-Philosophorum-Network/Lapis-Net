@@ -8,15 +8,19 @@
 </head>
 <body>
 <header id="identity-header">
-  <h1>Lapis Net</h1>
+  <div class="brand">
+    <h1>Lapis Net</h1>
+    <p id="tagline">No gatekeepers. You decide who to trust.</p>
+  </div>
   <div id="identity-info">
+    <span id="identity-label">You:</span>
     <span id="identity-fingerprint">loading identity&hellip;</span>
   </div>
   <div id="peer-panel">
     <span id="peer-count">0 peers</span>
     <form id="connect-form">
       <input type="text" id="connect-multiaddr" placeholder="/ip4/127.0.0.1/tcp/1234/p2p/Qm..." />
-      <button type="submit">Connect</button>
+      <button type="submit" class="btn-secondary">Connect</button>
     </form>
     <span id="connect-status"></span>
   </div>
@@ -32,12 +36,18 @@
     <span id="compose-status"></span>
   </section>
 
+  <details id="score-explainer" open>
+    <summary>What do the badges next to each post mean?</summary>
+    <p><strong>Credibility</strong> shows how much <em>you</em> — through people you trust, and people they trust — can vouch for this author. "Unrated" means you have no trust path to them yet. It does not mean they are distrusted.</p>
+    <p><strong>Boost</strong> shows how many sats other people have spent to promote this post. It fades over time, and is usually zero right now since boosting isn't fully wired up yet.</p>
+  </details>
+
   <section id="timeline-controls">
     <label>
       <input type="checkbox" id="include-filtered" />
       Show filtered content
     </label>
-    <button id="refresh-button" type="button">Refresh</button>
+    <button id="refresh-button" class="btn-secondary" type="button">Refresh</button>
   </section>
 
   <section id="timeline">
@@ -55,12 +65,17 @@
     <p class="timeline-text"></p>
     <div class="timeline-ltr"></div>
     <details class="trust-form-details">
-      <summary>Rate trust</summary>
+      <summary>Rate this person's trustworthiness</summary>
+      <p class="trust-form-notice">This is a public, signed statement under your own identity. You're accountable for this judgment — not for what they do afterward.</p>
       <form class="trust-form">
         <input type="hidden" class="trust-target" />
         <label>
           Trust: <span class="trust-slider-value">50%</span>
-          <input type="range" class="trust-slider" min="0" max="100" value="50" />
+          <span class="trust-slider-row">
+            <span class="trust-slider-min">Distrust</span>
+            <input type="range" class="trust-slider" min="0" max="100" value="50" />
+            <span class="trust-slider-max">Trust fully</span>
+          </span>
         </label>
         <input type="text" class="trust-comment" placeholder="comment (optional)" />
         <button type="submit">Submit</button>
