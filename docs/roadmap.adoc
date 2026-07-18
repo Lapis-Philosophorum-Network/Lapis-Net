@@ -71,4 +71,35 @@ will eventually close properly.
 
 V0.2.1 and V0.2.2 are implemented (see `docs/architecture.adoc`'s "Virtus:
 LTR core (V0.2.1)" and "Minimal-Browser MVP (V0.2.2)" sections). **The V0.2
-milestone is complete.** V0.3 (Karma) is next.
+milestone is complete.**
+
+== V0.3 — Karma
+
+Target: the third of four scoring dimensions — Karma, a cheap one-click
+"like" with Bitcoin-chain-anchored, Veritas-weighted Sybil resistance —
+wired into the Minimal-Browser as a persistently-visible Like button.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.3
+| `lapis-net-karma`: `KarmaVote` data model (`Karma = t/(n+1)`, `t` =
+blocks since the voter's own first outgoing Bitcoin transaction, `n` =
+the voter's own prior eligible-vote count, always locally derived, never
+self-declared); GossipSub propagation with zero live chain-verification
+in the validation path (mirroring `OnChainProof`'s V0.2.1 precedent); a
+client-side, trusting (not trustless-SPV) Electrum chain-data source used
+only at local vote-cast time. Wired into `lapis-net-browser`: a new
+`POST /api/karma` route and a Like button, with Karma kept purely
+additive/display-only in `TimelineBuilder` (never affecting sort or
+filtering).
+|===
+
+=== Progress
+
+V0.3 is implemented (see `docs/architecture.adoc`'s "Karma: Bitcoin-
+anchored one-click likes (V0.3)" section). **The V0.3 milestone is
+complete.** Three of the fach-spec's four scoring dimensions (Veritas,
+Virtus, Karma) are now implemented; Madli remains the only one not yet
+started.

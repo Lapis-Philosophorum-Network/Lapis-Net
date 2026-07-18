@@ -2,15 +2,17 @@
 
 == Status
 
-V0.2.2 (V0.2 milestone complete): identity layer (V0.1.2), P2P node
-bootstrap (V0.1.3), DHT + Bitswap content storage via Nabu (V0.1.4), the
-Veritas trust-edge grant data model (V0.1.5), the Veritas transitive trust
-path-selection algorithm (V0.1.6), GossipSub propagation + Nabu persistence
-of Veritas grants (V0.1.7), a multi-node CLI demo proving the full V0.1
-stack end to end (V0.1.8 — V0.1 milestone complete), the Virtus/LTR data
-model with GossipSub propagation + Nabu persistence (V0.2.1), and a
-Minimal-Browser MVP — the first real Lapis Net client (V0.2.2, see below)
-— are implemented. Remaining modules are still skeletons. This document
+V0.3 (V0.2 milestone complete, V0.3 Karma landed): identity layer (V0.1.2),
+P2P node bootstrap (V0.1.3), DHT + Bitswap content storage via Nabu
+(V0.1.4), the Veritas trust-edge grant data model (V0.1.5), the Veritas
+transitive trust path-selection algorithm (V0.1.6), GossipSub propagation +
+Nabu persistence of Veritas grants (V0.1.7), a multi-node CLI demo proving
+the full V0.1 stack end to end (V0.1.8 — V0.1 milestone complete), the
+Virtus/LTR data model with GossipSub propagation + Nabu persistence
+(V0.2.1), a Minimal-Browser MVP — the first real Lapis Net client (V0.2.2 —
+V0.2 milestone complete), and Karma — the third of four scoring dimensions,
+a Bitcoin-anchored, Veritas-weighted one-click "like" (V0.3, see below) —
+are implemented. Remaining modules are still skeletons. This document
 grows as modules gain real implementations.
 
 == Layering
@@ -42,9 +44,12 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-virtus` — Virtus/LTR economy: signed, accumulating `LtrRecord` claims with GossipSub
   propagation + Nabu persistence and pure decay math (V0.2.1, see below) — a sibling scoring
   dimension to Veritas, not built on top of it (see Layering above)
+* `lapis-net-karma` — Karma: signed, gossiped `KarmaVote` "likes" with Bitcoin-chain-anchored
+  Sybil resistance (V0.3, see below) — a third sibling scoring dimension to Veritas and Virtus, not
+  built on top of either (see Layering above)
 * `lapis-net-browser` — Minimal-Browser MVP: a local, loopback-only Ktor HTTP server embedding a
-  real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below) — the first real Lapis
-  Net client, application layer (see Layering above)
+  real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below), now also wired to Karma
+  (V0.3) — the first real Lapis Net client, application layer (see Layering above)
 * `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness, including the multi-node trust-propagation demo
@@ -630,6 +635,122 @@ within the already-decided hand-written HTML/CSS/vanilla-JS tech stack, and the 
 XSS discipline is unchanged. Two real improvements (showing the actual trust path, visualizing LTR
 decay over time) were explicitly deferred, not silently dropped — both need new fields in the
 `/api/timeline` response that the server doesn't currently send.
+
+== Karma: Bitcoin-anchored one-click likes (V0.3)
+
+`lapis-net-karma` is the third of the four scoring dimensions (Layering above). Its data model,
+`KarmaVote`, is a cheap, one-click "like" — but one carrying built-in Sybil resistance from two
+independent mechanisms combined: a Bitcoin-chain-derived time anchor and Veritas-weighting.
+`Karma = t/(n+1)`, where `t` is the number of Bitcoin blocks elapsed since the voter's own first
+outgoing transaction (no chain history ⇒ `t < 0` structurally impossible to represent ⇒ Karma is
+always `0.0` for an unanchored identity — enforced by `NoAnchorClaim`/`ChainAnchorClaim`'s own
+`init` invariants, not merely by convention), and `n` is the voter's own prior eligible-vote count —
+critically, always derived locally by each observer from its own indexed vote history, **never**
+self-declared inside the wire message (`KarmaVoteCodec`'s layout has no `n` field at all).
+
+**No live chain-verification in the GossipSub validation path, ever — the wave's central design
+decision.** `KarmaGossip.onGossipMessage` validates only structure and signature; it never calls
+out to Electrum or any network service. This mirrors `OnChainProof`'s already-accepted V0.2.1
+precedent exactly, for the same three reasons: avoiding a liveness dependency on a third-party
+server inside the hot gossip-validation path, avoiding cross-node non-determinism (different nodes
+could observe different, possibly reorg'd chain state), and avoiding DoS amplification (an attacker
+flooding gossip messages that each trigger an outbound network call would be a powerful
+amplification primitive). Chain data is only ever consulted client-side, once, at local vote-cast
+time, via `KarmaAnchorCache` — never as part of judging someone else's vote.
+
+**Chain-data source: a trusting light client, explicitly not trustless SPV.** No genuine SPV client
+library exists on Maven Central for Kotlin/JVM (confirmed during this wave's planning); building
+real header-chain-verified SPV from scratch was out of scope. `ElectrumTimeAnchorSource` talks to a
+real Electrum server over the `electrum-client`/`bitcoin-kmp` libraries and trusts every response at
+face value — history entries, raw transaction bytes, chain tip height — with no merkle-proof
+verification against a block header chain and no independent cross-check against a second server. A
+malicious or compromised Electrum server can lie about any of these facts undetected. This is an
+accepted, explicitly-documented scope limitation, mirroring `OnChainProof`'s own "structural/
+trusting, not verified" precedent, and only matters for a node's own outgoing vote — `KarmaGossip`
+never calls this class at all. The underlying Electrum protocol transport is also plaintext TCP
+only, no TLS, documented as a further caveat of the same "trusting, not verified" shape.
+
+**Bitcoin address derivation: P2WPKH only, a deliberate protocol-defined scope narrowing.** An
+identity's Bitcoin presence is looked up via `HASH160(compressed secp256k1 pubkey)` —
+`BitcoinAddressDerivation` — the sole derivation this wave recognizes. Legacy P2PKH, other HD
+derivation paths, multisig, and Taproot addresses are not found, even if the identity has genuine
+Bitcoin history under one of those. This narrows Karma's real-world reach in exchange for a single,
+unambiguous, protocol-wide derivation rule every node computes identically.
+
+**Sybil-resistance fix landed during this wave's review loop: at most one tracked vote per
+`(voter, targetCid)`.** The original implementation capped `KarmaVoteIndex` only globally
+(`MAX_TRACKED_VOTES`), with no per-voter limit. Because `KarmaVote.nonce` makes every vote
+content-id-distinct, a single identity could sign and gossip unlimited free votes (no PoW, no
+stake, unlike Virtus's `LtrRecord`, which at least claims a real BTC payment) — each one evicting
+some unrelated voter's/target's vote from the shared index, and inflating a single target's Karma
+via unbounded harmonic-sum repeat-voting (`t/(n+1)` only shrinks the *marginal* value of a repeat
+vote; the *total* contribution from `M` repeat votes toward one target grows as `t · H_M`, unbounded
+as `M` grows). Fixed by making a new vote from a voter who already has a tracked vote for the same
+target **replace** the existing entry (most-recent-wins), keeping all three secondary indices
+(`votesByContentId`/`votesByTarget`/`votesByVoterMap`) in lockstep via the same helper used by LRU
+eviction. This fully closes per-target Karma inflation from one identity; it deliberately does
+**not** limit how many *distinct* targets one identity can vote on (a narrower, lower-severity
+residual gap, tracked as future work — see below) — Sybil resistance across many distinct
+*identities* is intentionally left to the Bitcoin-anchor cost, not to this index.
+
+**`TimelineBuilder`/`TimelineEntry` scope discipline: Karma is purely additive/display, never
+affects sort or filtering.** This is a deliberate narrowing versus the fach-spec's fuller vision of
+Karma "bridging trust networks" — `TimelineBuilder` does not yet have a genuine default-private-
+timeline mode to bridge past, so wiring Karma into sort order or the credibility filter this wave
+would either be a no-op or would silently misrepresent what Karma actually measures for a viewer.
+`karmaScore`/`karmaVoteCount` are attached to every timeline entry and rendered, but
+`TimelineBuilder.build`'s sort key remains exactly `(ltrWeightMsat desc, publishedAtEpochSeconds
+desc)`, and `filteredOut` is still computed purely from Veritas credibility — proven by dedicated
+tests showing a huge self-cast karma score changes neither ordering nor filtering.
+
+**Review findings this wave.** Two independent review+security rounds ran before this wave landed
+cleanly. Round 1 found and fixed: the per-voter vote-flooding gap above (the wave's one MAJOR
+finding, security-relevant); `KarmaAnchorCache` never cached `TimeAnchorLookupResult.NotFound`,
+contradicting its own doc comment and re-triggering a full Electrum scan (up to
+`maxHistoryEntriesScanned` round-trips) on every single vote cast by an as-yet-unanchored identity
+— fixed with a bounded `NOT_FOUND_TTL_SECONDS` cache, unlike a genuine `Found` genesis transaction,
+which is a fixed historical fact and is cached without expiry; a missing `KarmaAnchorCacheTest`
+covering the cache's security-critical contracts (added, 9 tests); `cachedGenesis` was an
+unsynchronized `HashMap` under concurrent Ktor request threads, keyed by a lossy truncated
+fingerprint string — fixed by switching to a `ConcurrentHashMap` keyed directly by
+`Secp256k1PublicKey`; raw Electrum server error text could leak into the `POST /api/karma` HTTP 502
+body — fixed by logging full detail server-side and surfacing only a generic message; a missing CID
+length bound on `parseCidOrNull`; and the Like button's "this is a public, signed statement under
+your own identity" framing was buried in a collapsed FAQ rather than always visible near the button
+itself, unlike the equivalent trust-rating-form notice. Round 2 independently verified all of the
+above and surfaced one residual gap in the same error-sanitization fix: the chain-tip-height RPC
+path (`ElectrumTimeAnchorSource.currentChainTipHeight()`) used a separate code path that the first
+sanitization pass missed, so a malicious Electrum server could still leak raw response text via that
+sibling call — closed with the identical treatment (log full detail, throw a generic message) plus a
+regression test proving the leak no longer occurs.
+
+**Known, deliberately accepted gaps:**
+
+* **Distinct-target vote flooding is not capped.** The per-target replace-on-conflict fix above
+  closes per-target Karma inflation from one identity, but a single costless identity can still
+  gossip votes toward many thousands of *different* target CIDs, still consuming
+  `KarmaVoteIndex`'s shared `MAX_TRACKED_VOTES` LRU slots and evicting unrelated voters'/targets'
+  entries. Tracked as a follow-up — e.g. a per-voter distinct-target quota or a lightweight
+  admission cost.
+* **No live chain verification anywhere** — see above; this is the wave's central, permanent design
+  boundary for the gossip path, not a gap expected to close later the way V0.2.1's `OnChainProof`
+  gap might.
+* **`RealElectrumRpc`'s connection has no `close()`/lifecycle wiring into `BrowserServer.stop()`** —
+  a real, if bounded, resource gap: one live socket + daemon thread persists for the process
+  lifetime once a node's first vote establishes it. Not attacker-amplifiable, since nothing external
+  can trigger additional `RealElectrumRpc` instances to be constructed.
+* **Empty `ElectrumServers.PLACEHOLDER` ships by default** — every real `POST /api/karma` call fails
+  with a clean 502 out of the box until an operator configures a real, reachable Electrum server
+  list; this sandbox's outbound network policy could not verify real Electrum reachability during
+  this wave (raw TCP to well-known public Electrum servers all timed out through the proxy), so an
+  unverified hostname list was deliberately not shipped in its place.
+* **`n`'s observer-dependent nature** — different observers can legitimately compute a different
+  `karmaValue()` for the same vote depending on their own partial gossip view (which prior votes
+  from that voter they happen to have indexed). This is by design: `n` is a local heuristic, not a
+  consensus or signed value.
+
+With V0.3 landed, all three of Veritas, Virtus, and Karma — three of the fach-spec's four scoring
+dimensions — are implemented; Madli remains the only one not yet started.
 
 == Diagrams
 
