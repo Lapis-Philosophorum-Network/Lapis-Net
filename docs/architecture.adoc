@@ -2,15 +2,16 @@
 
 == Status
 
-V0.2.1: identity layer (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap
-content storage via Nabu (V0.1.4), the Veritas trust-edge grant data model
-(V0.1.5), the Veritas transitive trust path-selection algorithm (V0.1.6),
-GossipSub propagation + Nabu persistence of Veritas grants (V0.1.7), a
-multi-node CLI demo proving the full V0.1 stack end to end (V0.1.8 — V0.1
-milestone complete), and the Virtus/LTR data model with GossipSub
-propagation + Nabu persistence (V0.2.1, see below) are implemented.
-Remaining modules are still skeletons. This document grows as modules gain
-real implementations.
+V0.2.2 (V0.2 milestone complete): identity layer (V0.1.2), P2P node
+bootstrap (V0.1.3), DHT + Bitswap content storage via Nabu (V0.1.4), the
+Veritas trust-edge grant data model (V0.1.5), the Veritas transitive trust
+path-selection algorithm (V0.1.6), GossipSub propagation + Nabu persistence
+of Veritas grants (V0.1.7), a multi-node CLI demo proving the full V0.1
+stack end to end (V0.1.8 — V0.1 milestone complete), the Virtus/LTR data
+model with GossipSub propagation + Nabu persistence (V0.2.1), and a
+Minimal-Browser MVP — the first real Lapis Net client (V0.2.2, see below)
+— are implemented. Remaining modules are still skeletons. This document
+grows as modules gain real implementations.
 
 == Layering
 
@@ -41,6 +42,9 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-virtus` — Virtus/LTR economy: signed, accumulating `LtrRecord` claims with GossipSub
   propagation + Nabu persistence and pure decay math (V0.2.1, see below) — a sibling scoring
   dimension to Veritas, not built on top of it (see Layering above)
+* `lapis-net-browser` — Minimal-Browser MVP: a local, loopback-only Ktor HTTP server embedding a
+  real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below) — the first real Lapis
+  Net client, application layer (see Layering above)
 * `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness, including the multi-node trust-propagation demo
@@ -516,6 +520,100 @@ exists on Maven Central and its POM pins the exact `secp256k1-kmp-jvm` version a
 project, so it is a safe candidate for whichever future wave actually constructs, signs, or verifies
 real Bitcoin transaction bytes — nothing in V0.2.1 parses or constructs transaction bytes, so adding
 the dependency now would be unused weight.
+
+== Minimal-Browser MVP (V0.2.2)
+
+`lapis-net-browser` is the first real Lapis Net client — the V0.2 milestone's second and final wave.
+It embeds a real node (identity, GossipSub, Nabu storage, Veritas, Virtus) in the same JVM process as
+a small local HTTP server, and serves a hand-written, framework-free HTML/CSS/vanilla-JS page that
+shows a timeline of content annotated with Veritas credibility and Virtus/LTR-weighted sort order.
+
+**Tech-stack decision: an embedded local Ktor server, not Compose Multiplatform or KVision/Kilua.**
+Lapis Net's sibling federated projects (Lapis Cloud, Pepela Portal) use a Ktor-server-plus-KVision-
+web-client split for a real architectural reason those projects have and this one doesn't: a genuine
+client/server separation. A `LapisNode` already *is* the full network participant — there is no
+separate backend to RPC into. Compose Multiplatform Desktop would be the more architecturally
+"correct" long-term fit (direct in-process function calls, no HTTP layer at all), but it is a heavy
+new toolchain this project doesn't need yet to answer this wave's actual question ("can a small
+pilot group see Veritas/Virtus data and use it"). A tiny embedded Ktor server plus a `fetch()`-only
+static page — no JS build toolchain, no npm, no bundler — is the smallest new dependency surface
+that gets a pilot test in front of users soonest, without foreclosing a future Compose Desktop (or
+web) rewrite once real pilot feedback exists.
+
+**`PostAnnouncement`: small, deliberately temporary content-discovery scaffolding, not a protocol
+commitment.** Before any timeline can exist, the browser needs to know which content is even a
+candidate — and no signed author-to-content binding exists anywhere else in this codebase.
+`NabuStorage` is anonymous, content-addressed byte storage; `VeritasGrant` is a trust edge, not
+content; `LtrRecord` only ever *references* an already-existing CID, never creates one. The
+mechanism meant to solve "how does content enter the candidate pool" is Karma (`Karma → Veritas →
+Virtus`, per `docs/requirements.adoc`) — not built yet (V0.3). `PostAnnouncement`, scoped to
+`lapis-net-browser` (application layer, not protocol core or scoring substrate), plays that role
+just well enough for one browser vendor's MVP: a small, signed struct mirroring `LtrRecord`'s
+hardened codec/gossip/index shape exactly, explicitly documented as scaffolding likely to be deleted
+wholesale once V0.3's real Karma lands, not a commitment other vendors must adopt.
+
+**One deliberate structural deviation from `LtrRecord`'s precedent: the post body bytes travel with
+the announcement, not just a `Cid` reference.** `NabuStorage`'s own documented V0.1.4 known
+limitation is that cross-node DHT provider discovery (`findProviders()`) does not work — a
+`PostAnnouncement` that only carried a `Cid` would hit that same broken discovery path the moment a
+second node tries to render someone else's post. Embedding `bodyBytes` directly and having every
+node — sender and every receiver — independently derive its own `Cid` via `storage.put(bodyBytes)`
+sidesteps the gap entirely: content-addressing guarantees identical bytes hash to the identical
+`Cid` on every node, with no cross-node discovery step needed at all.
+
+**The `Credibility.NO_PATH` vs. `RESOLVED(0)` distinction is the single most safety-critical piece
+of logic in this module.** A brand-new pilot user with no trust relationships must see their whole
+timeline as "unrated," never as "everyone is maximally distrusted" — collapsing this distinction
+(treating `TrustPathFinder.findPath() == null` the same as a resolved path with score 0) would
+directly contradict Veritas's own documented bootstrap design (a newcomer sees the unfiltered
+stream, not something that *looks* like universal distrust). `TimelineBuilder`'s credibility filter
+only ever applies to a `RESOLVED` score below threshold; a `NO_PATH` candidate is never filtered.
+
+**Review findings this wave — one genuinely critical.** Independent security review found
+`PostAnnouncementGossip` wrote every gossiped post's body bytes to storage completely uncapped — no
+persistence cap gated this write at all, unlike `LtrRecordIndex`'s hardened two-cap pattern this
+module otherwise mirrors faithfully. Since a cheap, self-signed, freshly-nonced `PostAnnouncement`
+always passes content-id dedup, and every relaying node independently repeated the same unconditional
+write, this reproduced V0.1.7's fixed "network-amplified disk growth" bug class in a worse form (no
+cap at all, versus "a cap exists but might be reached"). Fixed with an independent, `Cid`-keyed,
+non-evicting `MAX_PERSISTED_BODIES` cap (`PostAnnouncementIndex.tryReserveBodyPersistence()`) gating
+the body-bytes write at both the `announce()` and `onGossipMessage()` call sites — reaching the cap
+does not decline the announcement itself, only its local body cache, matching this codebase's
+established "declining persistence never declines the message" pattern. A parallel major finding —
+uncaught storage-fault exceptions leaked full local filesystem paths in HTTP 500 responses,
+live-reproduced against both `GET /api/timeline` and `POST /api/posts` — was fixed with a generic
+Ktor `StatusPages` handler (defense-in-depth against any future uncaught exception in any route)
+plus a safe fallback on the timeline's per-entry storage lookup. Both fixes were independently
+re-verified in a second review round, including live re-reproduction of the path-leak scenario
+against the fix.
+
+**Known, deliberately accepted gaps:**
+
+* No LTR/Virtus record *authoring* in this MVP — read-only display only. Real LTR spending needs
+  actual Bitcoin/Lightning payment (V0.6), and V0.2.1's `OnChainProof` has zero live chain
+  verification, so an in-app "spend sats" button today would either lie about a real payment or
+  require users to hand-construct a transaction outside the app — both bad pilot UX. Practical
+  consequence: Virtus sorting is visually inert (everything at zero weight, sorted by recency)
+  during the pilot unless an operator manually seeds demo `LtrRecord`s outside the HTTP surface.
+* No "confirm" mechanism (multi-confirmer credibility) — no protocol data model for it exists yet.
+  `Credibility`'s `confirmers` parameter is forward-compatible scaffolding, always empty this wave.
+* No bootstrap infrastructure exists yet (V0.4) — `POST /api/peers/connect` (manual multiaddr
+  exchange, mirroring Veritas's own public-key-exchange convention) is necessary MVP scope, not an
+  extra: without it, pilot nodes on different networks could never find each other at all.
+* No rate limiting on the signing routes (`POST /api/posts`/`POST /api/trust`) — an accepted
+  tradeoff for a loopback-only, single-user pilot server holding the operator's own key. The
+  server's `127.0.0.1`-only binding is a hard, tested requirement, not a suggestion; the JSON-only
+  `ContentNegotiation` setup incidentally blocks browser-based cross-origin requests to these routes
+  today, though this is an incidental side effect of content-type enforcement, not a configured
+  CORS policy — worth revisiting explicitly if this ever changes.
+* No automated UI/JS test coverage — the actual complexity (scoring, sorting, gossip validation,
+  signing) is fully covered by the pure-core and Ktor-route test suites; the HTML/JS itself is a
+  thin `fetch()` layer over already-tested JSON endpoints, verified instead by a one-time manual
+  two-node checklist (documented in the wave's own commit history) rather than a browser-automation
+  dependency.
+
+With V0.2.2 landed, the V0.2 milestone (Virtus/LTR economy plus a real, usable first client) is
+complete.
 
 == Diagrams
 

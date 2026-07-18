@@ -60,11 +60,15 @@ merged). Structural-only `OnChainProof` — no live Bitcoin chain
 verification yet (known, documented limitation).
 
 | V0.2.2
-| Minimal-Browser (MVP): shows Veritas score + Virtus/LTR-weighted sorting
-for a timeline. Tech-stack choice is part of that wave's own planning step.
+| Minimal-Browser (MVP): a local, loopback-only Ktor HTTP server embedding
+a real node, serving a framework-free HTML/JS timeline UI. Shows Veritas
+credibility + Virtus/LTR-weighted sorting; a small, deliberately temporary
+`PostAnnouncement` primitive fills the content-discovery gap Karma (V0.3)
+will eventually close properly.
 |===
 
 === Progress
 
-V0.2.1 is implemented (see `docs/architecture.adoc`'s "Virtus: LTR core
-(V0.2.1)" section). V0.2.2 (Minimal-Browser) is next.
+V0.2.1 and V0.2.2 are implemented (see `docs/architecture.adoc`'s "Virtus:
+LTR core (V0.2.1)" and "Minimal-Browser MVP (V0.2.2)" sections). **The V0.2
+milestone is complete.** V0.3 (Karma) is next.
