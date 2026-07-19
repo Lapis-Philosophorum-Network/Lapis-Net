@@ -32,4 +32,15 @@ dependencies {
     runtimeOnly(rootProject.libs.logback.classic)
 
     testImplementation(rootProject.libs.ktor.server.test.host)
+    // Test-only, deliberately NOT `implementation` - LightningLtrEndpointTest.kt needs to build a
+    // real, in-process, cryptographically signed BOLT-11 invoice (via Bolt11Invoice.create) to
+    // exercise POST /api/ltr/lightning end to end, exactly the way LightningProofVerifierTest does
+    // in lapis-net-virtus. This is a test-classpath-only addition - production code in this module
+    // (BrowserApi.kt) never depends on lightning-kmp/bitcoin-kmp; see LightningProofVerifier's
+    // invoiceAmountMsatOrNull() helper, which is what the real route uses instead. bitcoin-kmp is
+    // pinned to the same 0.31.0 used everywhere else in this project (see lapis-net-virtus's
+    // build.gradle.kts version note) purely for consistency across test suites, not because this
+    // module's test code interacts with lapis-net-virtus's compiled classes directly.
+    testImplementation(rootProject.libs.lightning.kmp)
+    testImplementation(rootProject.libs.bitcoin.kmp)
 }

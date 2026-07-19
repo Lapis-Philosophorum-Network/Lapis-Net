@@ -2,7 +2,7 @@
 
 == Status
 
-V0.5 (V0.1-V0.4 milestones complete, V0.5 Madli landed): identity layer
+V0.6 (V0.1-V0.5 milestones complete, V0.6 Lightning proof landed): identity layer
 (V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap content storage via
 Nabu (V0.1.4), the Veritas trust-edge grant data model (V0.1.5), the
 Veritas transitive trust path-selection algorithm (V0.1.6), GossipSub
@@ -18,8 +18,11 @@ self-trust-linking, and keystore encryption at rest (V0.4 — V0.4 milestone
 complete), and Madli — the fourth and final scoring dimension, a
 machine-to-machine node-reputation system rating infrastructure serving
 quality with Veritas-weighted, decay-weighted, weighted-median aggregation
-(V0.5, see below) — are implemented. Remaining modules are still
-skeletons. This document grows as modules gain real implementations.
+(V0.5), and `LightningProof` — the second, fully cryptographically
+verified `LtrProof` implementation, verified in the gossip hot path, plus
+the first LTR record-authoring HTTP endpoint (V0.6, see below) — are
+implemented. Remaining modules are still skeletons. This document grows
+as modules gain real implementations.
 
 == Layering
 
@@ -50,7 +53,8 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   see below) are all implemented
 * `lapis-net-virtus` — Virtus/LTR economy: signed, accumulating `LtrRecord` claims with GossipSub
   propagation + Nabu persistence and pure decay math (V0.2.1, see below) — a sibling scoring
-  dimension to Veritas, not built on top of it (see Layering above)
+  dimension to Veritas, not built on top of it (see Layering above); now also `LightningProof`, the
+  second, fully cryptographically verified `LtrProof` implementation (V0.6, see below)
 * `lapis-net-karma` — Karma: signed, gossiped `KarmaVote` "likes" with Bitcoin-chain-anchored
   Sybil resistance (V0.3, see below) — a third sibling scoring dimension to Veritas and Virtus, not
   built on top of either (see Layering above)
@@ -60,8 +64,9 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   Karma/Virtus sibling-independence rule, see the V0.5 section below)
 * `lapis-net-browser` — Minimal-Browser MVP: a local, loopback-only Ktor HTTP server embedding a
   real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below), now also wired to Karma
-  (V0.3) and to QR/deep-link connect + self-trust-linking (V0.4, see below) — the first real Lapis
-  Net client, application layer (see Layering above)
+  (V0.3), to QR/deep-link connect + self-trust-linking (V0.4), and to `POST /api/ltr/lightning` —
+  the first LTR record-authoring endpoint (V0.6, see below) — the first real Lapis Net client,
+  application layer (see Layering above)
 * `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below),
   now with operator-configurable bootstrap peers and listen address (V0.4, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
@@ -1032,6 +1037,136 @@ engine only; it does not implement any protocol-level reward or penalty tied to 
 
 With V0.5 landed, all four of the fach-spec's scoring dimensions — Veritas, Virtus, Karma, and
 Madli — are now implemented.
+
+== Lightning proof (V0.6)
+
+V0.6 closes V0.2.1's "Zwei Zahlungswege" gap on the Lightning side: `LightningProof`, the second
+`LtrProof` implementation alongside `OnChainProof`, plus `LightningProofVerifier` — the object that
+performs the complete, real cryptographic verification chain for it. Unlike `OnChainProof`,
+`LightningProof` is fully cryptographically checked, with no simulation and no live network/node
+required: preimage-to-hash, real BOLT-11 invoice parsing and signature verification, and every
+anti-spoofing/anti-replay cross-check described below all run offline, entirely from the bytes
+already inside a gossiped `LtrRecord`.
+
+**`LightningProof{preimage, paymentHash, signedInvoice}` — structural shape only, exactly mirroring
+`OnChainProof`'s "trusting, not verified" constructor discipline.** `preimage` and `paymentHash` are
+each exactly 32 bytes; `signedInvoice` is a BOLT-11 bech32 string capped at
+`LightningProof.MAX_SIGNED_INVOICE_BYTES` (2048 — generous headroom over a typical 200-700 char
+invoice, still bounding the length-prefixed wire field before allocation). The constructor never
+checks `sha256(preimage) == paymentHash`, never parses the invoice, and never verifies its
+signature — all of that is `LightningProofVerifier`'s job, so `LtrRecordCodec.decode` stays purely
+structural, the same reason `OnChainProof`'s own constructor stays shape-only.
+
+**Codec: `proofType = 2`, previously reserved and rejected, now implemented.** Layout:
+`preimage(32) | paymentHash(32) | invoiceLen(2) | signedInvoice(invoiceLen)`. `invoiceLen` is
+validated against `LightningProof.MAX_SIGNED_INVOICE_BYTES` BEFORE the invoice buffer is allocated
+(a DoS guard mirroring `cidLen`'s existing handling), and the declared `proofLen` must equal exactly
+`66 + invoiceLen` — any mismatch, including trailing bytes, is rejected outright, never silently
+truncated or reinterpreted. `LtrRecordCodec.MAX_PROOF_BYTES` is bumped from 1024 to 4096 to
+comfortably clear a Lightning proof's worst case (2114 bytes). No new signing-domain-separation tag
+was needed: `proof` is already inside `encodeSignedBody`'s output, so a `LightningProof` is already
+covered by the existing `VIRTUS_LTR_RECORD_DOMAIN_TAG` binding on the whole record — the invoice's
+own BOLT-11 signature is a separate, Lightning-protocol-defined signature verified against
+Lightning's own rules, not a LapisNet-internal scheme.
+
+**The complete verification chain (`LightningProofVerifier.verify`), all AND-ed, never throws:**
+
+. `sha256(proof.preimage) == proof.paymentHash`.
+. `Bolt11Invoice.read(proof.signedInvoice)` parses successfully — this call verifies the invoice's
+  own embedded signature internally as part of parsing (`lightning-kmp`'s real BOLT-11
+  implementation, not a hand-rolled parser).
+. The invoice's own parsed payment hash equals `proof.paymentHash`.
+. **Amount binding (mandatory, anti-spoofing).** The invoice must declare a non-null amount, and
+  that amount (msat) must equal `record.initialValueMsat` exactly — the invoice, not the record, is
+  the source of truth for the claimed amount.
+. **Recipient binding — `invoice.nodeId == record.viewId` (mandatory, not optional).** This is the
+  wave's central protocol commitment: a manufacturer's Lightning node key IS its Lapis viewId. The
+  planning alternative (leaving this unenforced) was explicitly rejected — without it, anyone could
+  pay their own Lightning node and claim the resulting proof boosts a completely different view.
+. **Content binding — `invoice.description == canonicalMemo(record.cid, record.viewId)`
+  (mandatory, anti-replay).** `canonicalMemo` is `"lapisnet-ltr:v1:" + cid + ":" + viewId-hex`. An
+  invoice using `descriptionHash` instead of a plain `description` is rejected outright — there is
+  no way to confirm a hash-only description matches the canonical memo without its preimage, which
+  the verifier never has. Without this check, a genuine, validly-signed `(preimage, invoice)` pair
+  paid for one `(cid, viewId)` could be replayed as if it proved a payment for a different one.
+. **Expiry is deliberately NOT checked.** A settled payment's invoice may legitimately be past its
+  own BOLT-11 expiry by the time the resulting record propagates through gossip — the payment
+  already happened, and expiry only ever governs whether a *new* payment attempt should still be
+  accepted, which is moot once a preimage already proves settlement.
+
+Chain-agnostic by design: `Bolt11Invoice.read` accepts any of the standard BOLT-11 prefixes
+(mainnet `lnbc`, testnet3/testnet4 `lntb`, regtest `lnbcrt`) with no additional restriction in the
+verifier — the planning alternative (mainnet-only) was explicitly rejected so the same code path
+works for a pilot's testnet/regtest dry runs without a special case.
+
+**Gossip hot path — a deliberate divergence from `OnChainProof`, and from every earlier wave's
+"never call out to a network service inside the validator" precedent (Karma/Madli).** Those
+precedents exist specifically because a *live chain/network lookup* inside `onGossipMessage` would
+add a liveness dependency on a third party, cross-node non-determinism (different nodes could
+observe different, possibly reorg'd state), and a DoS-amplification vector. `LightningProofVerifier.verify`
+is categorically different: a pure, bounded, local computation — hash a preimage, parse and verify
+one BOLT-11 signature, compare a handful of already-size-capped fields — with zero network I/O and
+zero liveness dependency on anything outside the message bytes already in hand. `LtrGossip.onGossipMessage`
+therefore calls it directly, immediately after the existing `LtrRecord.verify(record)` signature
+check, rejecting the message as `Invalid` on a crypto-invalid `LightningProof` before any
+persistence/indexing is attempted. The result: a `LightningProof` record is strictly *harder* to
+forge over gossip than an `OnChainProof` record (which still has zero live-payment verification, per
+V0.2.1's known gap) — the correct asymmetry, since Lightning verification is the one real check this
+codebase can do for free.
+
+**`lightning-kmp` confinement — `implementation`-only in `lapis-net-virtus`, exactly mirroring
+`lapis-net-karma`'s `electrum-client`/`bitcoin-kmp` confinement to `ElectrumTimeAnchorSource`.**
+Every `fr.acinq.lightning`/`fr.acinq.bitcoin` type stays inside `LightningProofVerifier.kt` — no
+public signature anywhere in this module (or any consumer) ever exposes one. `lapis-net-browser`
+needed one piece of Lightning-derived data (an invoice's amount) without taking on the dependency
+itself, so `LightningProofVerifier.invoiceAmountMsatOrNull(signedInvoice): Long?` is a small,
+already-primitive-typed (`Long?`) helper — the one deliberately narrow crack in the confinement,
+returning a plain number rather than any ACINQ type.
+
+**Version note — the plan's originally-specified `lightning-kmp` 1.13.0 does not exist on Maven
+Central.** The highest published `fr.acinq.lightning:lightning-kmp-jvm` version is 1.8.4 (verified
+against the real `maven-metadata.xml`); this wave uses that instead. 1.8.4's own POM pins an older
+`bitcoin-kmp-jvm` (0.20.0) than this project already depends on elsewhere (0.31.0, via
+`lapis-net-karma`) — `lapis-net-virtus/build.gradle.kts` adds an explicit
+`implementation(rootProject.libs.bitcoin.kmp)` to force the same 0.31.0 resolved everywhere else in
+this project (Gradle's default highest-version-wins conflict resolution; `lightning-kmp`'s Gradle
+module metadata uses `requires`, not `strictly`, so nothing blocks the bump). Verified compatible by
+this wave's full test suite exercising real signed-invoice creation, parsing, and verification
+against the resolved (newer) `bitcoin-kmp`.
+
+**`POST /api/ltr/lightning` (`lapis-net-browser`) — the first LTR/Virtus record *authoring*
+endpoint**, closing part of V0.2.2's known "no LTR record authoring in this MVP" gap for the
+Lightning path specifically. Accepts an *externally-obtained* `(preimage, signedInvoice)` pair — the
+author paid a real BOLT-11 invoice with their own Lightning wallet out-of-band; this route never
+sends a payment itself (no embedded node/wallet exists in this codebase, see the scope box below).
+The amount is always derived from the invoice server-side via `invoiceAmountMsatOrNull`, never
+trusted from the client (there is no amount field on the request DTO at all); the payment hash is
+always derived server-side via `sha256(preimage)`, never trusted either. The resulting `LtrRecord`
+is verified with the exact same `LightningProofVerifier.verify` call `LtrGossip.onGossipMessage`
+uses — synchronously, before `announce()` — so a self-authored record can never enter this node's own
+index/gossip stream in a state gossip peers would themselves reject.
+
+**Known, deliberately honest scope cuts — mirroring V0.3's Electrum-trust and V0.5's
+Bitswap-modulation "structurally ready, not end-to-end exercised" precedent:**
+
+* **No embedded Lightning node.** Nothing in this codebase runs a real `lightning-kmp` node,
+  maintains a channel, or has access to real funds. `LightningProofVerifier` only ever verifies
+  proofs already handed to it — it never constructs, sends, or receives a Lightning payment.
+* **No BOLT-12 Offer/DHT publication, no `invoice_request`/auto-respond flow.** The Virtus spec
+  note's fuller "A. Lightning via BOLT-12 Offer" vision (a view publishing a standing offer other
+  nodes can pay against without out-of-band coordination) is not built — V0.6 only covers the
+  BOLT-11 "pay first, submit proof after" path.
+* **No live payment settlement testing.** Every test in this wave substitutes a preimage the test
+  chose and a BOLT-11 invoice it signed itself (both via real, in-process `lightning-kmp` calls) —
+  the cryptography exercised is completely real, only the network settlement event (an actual
+  Lightning payment traversing a real channel) is out of reach in this sandbox/CI, exactly the
+  reasoning `ElectrumTimeAnchorSourceTest`'s fake RPC and `MadliRoutingPolicy`'s non-live-fetch
+  status already establish as this codebase's accepted testing boundary for external payment/network
+  infrastructure.
+
+With V0.6 landed, both of the fach-spec's "Zwei Zahlungswege" payment paths have a working
+`LtrProof` implementation — `OnChainProof` (structural only, live chain verification still an open
+gap) and `LightningProof` (fully cryptographically verified, including in the gossip hot path).
 
 == Diagrams
 

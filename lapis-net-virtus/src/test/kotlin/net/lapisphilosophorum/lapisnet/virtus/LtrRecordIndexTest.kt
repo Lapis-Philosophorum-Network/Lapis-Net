@@ -1,10 +1,24 @@
 package net.lapisphilosophorum.lapisnet.virtus
 
+import fr.acinq.bitcoin.ByteVector32
+import fr.acinq.bitcoin.Chain
+import fr.acinq.bitcoin.PrivateKey
+import fr.acinq.bitcoin.utils.Either
+import fr.acinq.lightning.Feature
+import fr.acinq.lightning.FeatureSupport
+import fr.acinq.lightning.Features
+import fr.acinq.lightning.MilliSatoshi
+import fr.acinq.lightning.payment.Bolt11Invoice
 import io.ipfs.cid.Cid
 import io.ipfs.multihash.Multihash
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import net.lapisphilosophorum.lapisnet.identity.Secp256k1KeyPair
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 private fun testCid(seed: Byte): Cid = Cid.buildCidV1(Cid.Codec.Raw, Multihash.Type.sha2_256, ByteArray(32) { seed })
 
@@ -18,6 +32,49 @@ private fun record(
     val payer = Secp256k1KeyPair.generate()
     return LtrRecord.create(payer, cid, viewId, initialValueMsat, testProof())
 }
+
+private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
+
+private val INVOICE_FEATURES =
+    Features(
+        mapOf(
+            Feature.VariableLengthOnion to FeatureSupport.Mandatory,
+            Feature.PaymentSecret to FeatureSupport.Mandatory,
+        ),
+    )
+
+/** A real, cryptographically valid [LightningProof] for `(cid, viewId)` - file-local, mirrors
+ * [LtrGossipOnGossipMessageTest]'s identically-purposed private helper (no shared test-fixture
+ * helper exists in this codebase for this - see that file's own doc comment convention). */
+private fun lightningProof(
+    cid: Cid,
+    viewId: Secp256k1KeyPair,
+    amountMsat: Long,
+): LightningProof {
+    val preimage = ByteArray(32).also { SecureRandom().nextBytes(it) }
+    val paymentHash = sha256(preimage)
+    val memo = LightningProofVerifier.canonicalMemo(cid, viewId.publicKey)
+    val invoice =
+        Bolt11Invoice
+            .create(
+                chain = Chain.Mainnet,
+                amount = MilliSatoshi(amountMsat),
+                paymentHash = ByteVector32(paymentHash),
+                privateKey = PrivateKey(viewId.privateKey.bytes),
+                description = Either.Left(memo),
+                minFinalCltvExpiryDelta = Bolt11Invoice.DEFAULT_MIN_FINAL_EXPIRY_DELTA,
+                features = INVOICE_FEATURES,
+            ).write()
+    return LightningProof(preimage, paymentHash, invoice)
+}
+
+private fun lightningRecord(
+    payer: Secp256k1KeyPair,
+    cid: Cid,
+    viewId: Secp256k1KeyPair,
+    proof: LightningProof,
+    initialValueMsat: Long,
+): LtrRecord = LtrRecord.create(payer, cid, viewId.publicKey, initialValueMsat, proof)
 
 class LtrRecordIndexTest :
     FunSpec({
@@ -139,6 +196,113 @@ class LtrRecordIndexTest :
             index.canAccept(newRecord) shouldBe true
         }
 
+        // --- C1 fix: hasLightningPaymentBeenUsed / canAccept's Lightning payment-hash dedup ----
+
+        test("hasLightningPaymentBeenUsed returns false when no record for the pair is tracked yet") {
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val index = LtrRecordIndex()
+
+            index.hasLightningPaymentBeenUsed(cid, viewId.publicKey, ByteArray(32) { 1 }) shouldBe false
+        }
+
+        test(
+            "hasLightningPaymentBeenUsed returns true once a tracked record for the pair carries that exact " +
+                "payment hash",
+        ) {
+            val payer = Secp256k1KeyPair.generate()
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val proof = lightningProof(cid, viewId, amountMsat = 1000)
+            val r = lightningRecord(payer, cid, viewId, proof, initialValueMsat = 1000)
+            val index = LtrRecordIndex()
+            index.add(r) shouldBe true
+
+            index.hasLightningPaymentBeenUsed(cid, viewId.publicKey, proof.paymentHash) shouldBe true
+        }
+
+        test("hasLightningPaymentBeenUsed returns false for a different payment hash on the same pair") {
+            val payer = Secp256k1KeyPair.generate()
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val proof = lightningProof(cid, viewId, amountMsat = 1000)
+            val r = lightningRecord(payer, cid, viewId, proof, initialValueMsat = 1000)
+            val index = LtrRecordIndex()
+            index.add(r) shouldBe true
+
+            index.hasLightningPaymentBeenUsed(cid, viewId.publicKey, ByteArray(32) { 9 }) shouldBe false
+        }
+
+        test("hasLightningPaymentBeenUsed ignores an OnChainProof record even with a matching byte pattern") {
+            // OnChainProof has no paymentHash concept at all - a tracked OnChainProof record must
+            // never be mistaken for a Lightning-proof record when checking payment-hash reuse.
+            val viewId = Secp256k1KeyPair.generate().publicKey
+            val cid = testCid(1)
+            val r = record(cid, viewId)
+            val index = LtrRecordIndex()
+            index.add(r) shouldBe true
+
+            index.hasLightningPaymentBeenUsed(cid, viewId, ByteArray(32) { 1 }) shouldBe false
+        }
+
+        test(
+            "canAccept returns false for a NEW record (different content id) whose LightningProof reuses an " +
+                "already-tracked payment hash for the same (cid, viewId) - the C1 double-counting fix",
+        ) {
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val proof = lightningProof(cid, viewId, amountMsat = 2000)
+            val index = LtrRecordIndex()
+            val first = lightningRecord(Secp256k1KeyPair.generate(), cid, viewId, proof, initialValueMsat = 2000)
+            index.add(first) shouldBe true
+
+            // A second, independently-signed record (different payer, fresh nonce - so a different
+            // content id) built around the SAME proof - exactly the exploit shape.
+            val second = lightningRecord(Secp256k1KeyPair.generate(), cid, viewId, proof, initialValueMsat = 2000)
+            first.contentId().contentEquals(second.contentId()) shouldBe false
+
+            index.canAccept(second) shouldBe false
+        }
+
+        test("canAccept returns true for a NEW record whose LightningProof has a fresh, unused payment hash") {
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val index = LtrRecordIndex()
+            val first =
+                lightningRecord(
+                    Secp256k1KeyPair.generate(),
+                    cid,
+                    viewId,
+                    lightningProof(cid, viewId, amountMsat = 2000),
+                    initialValueMsat = 2000,
+                )
+            index.add(first) shouldBe true
+
+            val second =
+                lightningRecord(
+                    Secp256k1KeyPair.generate(),
+                    cid,
+                    viewId,
+                    lightningProof(cid, viewId, amountMsat = 2000),
+                    initialValueMsat = 2000,
+                )
+
+            index.canAccept(second) shouldBe true
+        }
+
+        // --- isTrackedByContentId: the content-id-only half canAccept relies on, exposed separately
+        // so LtrGossip.announce can distinguish "already-accepted, harmless re-send" from "new" ---
+
+        test("isTrackedByContentId returns false for a not-yet-tracked record, true once added") {
+            val viewId = Secp256k1KeyPair.generate().publicKey
+            val r = record(testCid(1), viewId)
+            val index = LtrRecordIndex()
+
+            index.isTrackedByContentId(r) shouldBe false
+            index.add(r) shouldBe true
+            index.isTrackedByContentId(r) shouldBe true
+        }
+
         // --- tryReservePersistence: separate, non-evicting cap ----------------------------------
 
         test("tryReservePersistence succeeds for a new content id under the persistence cap") {
@@ -201,5 +365,80 @@ class LtrRecordIndexTest :
             index.add(r1) shouldBe true
             index.add(r2) shouldBe true
             index.allPairs().size shouldBe 3
+        }
+
+        // --- Round-2 atomicity fix: add() is the sole authoritative gate for the payment-hash
+        // nullifier, not just canAccept()/hasLightningPaymentBeenUsed() -------------------------
+
+        test(
+            "add rejects a NEW record (different content id) whose LightningProof reuses an already-tracked " +
+                "payment hash for the same (cid, viewId) - add() itself is now the atomic gate, not just canAccept",
+        ) {
+            val viewId = Secp256k1KeyPair.generate()
+            val cid = testCid(1)
+            val proof = lightningProof(cid, viewId, amountMsat = 2000)
+            val index = LtrRecordIndex()
+            val first = lightningRecord(Secp256k1KeyPair.generate(), cid, viewId, proof, initialValueMsat = 2000)
+            index.add(first) shouldBe true
+
+            val second = lightningRecord(Secp256k1KeyPair.generate(), cid, viewId, proof, initialValueMsat = 2000)
+            first.contentId().contentEquals(second.contentId()) shouldBe false
+
+            // Rejected by add() directly - no canAccept()/hasLightningPaymentBeenUsed() pre-check
+            // consulted here at all, proving add() enforces the invariant on its own.
+            index.add(second) shouldBe false
+            index.recordsFor(cid, viewId.publicKey) shouldBe listOf(first)
+        }
+
+        test(
+            "CONCURRENCY: N threads racing index.add() with distinct content ids sharing one Lightning payment " +
+                "hash - exactly one must succeed, never zero, never more than one",
+        ) {
+            // Adversarial concurrency test for the round-2 CRITICAL finding: the payment-hash
+            // check-then-act used to be split across two separate @Synchronized lock acquisitions
+            // (a read-only pre-check, then a separate add() mutation), so N concurrent callers could
+            // all pass the pre-check before any of them committed, then all successfully add() a
+            // distinct-content-id record backed by the SAME real payment - unbounded weight from one
+            // payment. This test proves add() alone is now atomic: every thread calls ONLY
+            // index.add(record) directly (no pre-check at all), released simultaneously via a
+            // CyclicBarrier (not a loop that might accidentally serialize on scheduling), and across
+            // a high thread count exactly one must win.
+            repeat(10) { run ->
+                val payer = Secp256k1KeyPair.generate()
+                val viewId = Secp256k1KeyPair.generate()
+                val cid = testCid((run + 1).toByte())
+                val amountMsat = 5_000_000L
+                val sharedProof = lightningProof(cid, viewId, amountMsat)
+                val threadCount = 32
+
+                // Distinct content ids: LtrRecord.create draws a fresh nonce every call even with an
+                // identical payer/cid/viewId/proof, exactly mirroring what a real fresh-nonce replay
+                // of POST /api/ltr/lightning would produce.
+                val records =
+                    (1..threadCount).map {
+                        lightningRecord(payer, cid, viewId, sharedProof, initialValueMsat = amountMsat)
+                    }
+                records.map { it.contentId().toList() }.toSet().size shouldBe threadCount
+
+                val index = LtrRecordIndex()
+                val barrier = CyclicBarrier(threadCount)
+                val executor = Executors.newFixedThreadPool(threadCount)
+                try {
+                    val futures =
+                        records.map { record ->
+                            executor.submit<Boolean> {
+                                barrier.await() // force every thread to be ready, then release together
+                                index.add(record)
+                            }
+                        }
+                    val results = futures.map { it.get(30, TimeUnit.SECONDS) }
+
+                    results.count { it } shouldBe 1
+                    index.recordsFor(cid, viewId.publicKey).size shouldBe 1
+                } finally {
+                    executor.shutdown()
+                    executor.awaitTermination(10, TimeUnit.SECONDS)
+                }
+            }
         }
     })

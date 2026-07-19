@@ -32,7 +32,11 @@ import net.lapisphilosophorum.lapisnet.trust.TrustGraph
 import net.lapisphilosophorum.lapisnet.trust.VeritasGossip
 import net.lapisphilosophorum.lapisnet.trust.VeritasGrant
 import net.lapisphilosophorum.lapisnet.trust.VeritasGrantCodec
+import net.lapisphilosophorum.lapisnet.virtus.LightningProof
+import net.lapisphilosophorum.lapisnet.virtus.LightningProofVerifier
 import net.lapisphilosophorum.lapisnet.virtus.LtrGossip
+import net.lapisphilosophorum.lapisnet.virtus.LtrRecord
+import java.security.MessageDigest
 
 private val logger = KotlinLogging.logger {}
 
@@ -80,6 +84,26 @@ data class NewKarmaVoteRequest(
 data class NewKarmaVoteResponse(
     val targetCid: String,
     val karmaVoteCount: Int,
+)
+
+/** Request body for `POST /api/ltr/lightning` - an *externally-obtained* `(preimage, signedInvoice)`
+ * pair, e.g. the author paid a real BOLT-11 invoice with their own Lightning wallet out-of-band and
+ * is now submitting proof of that payment. Deliberately carries no amount field - see that route's
+ * doc comment on why the amount is always derived server-side from [signedInvoice] itself, never
+ * trusted from the client. */
+@Serializable
+data class NewLightningLtrRequest(
+    val cid: String,
+    val viewIdHex: String,
+    val preimageHex: String,
+    val signedInvoice: String,
+)
+
+@Serializable
+data class NewLightningLtrResponse(
+    val cid: String,
+    val initialValueMsat: Long,
+    val ltrRecordCount: Int,
 )
 
 @Serializable
@@ -324,6 +348,131 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
             call.respond(NewKarmaVoteResponse(targetCid = targetCid.toString(), karmaVoteCount = karmaVoteCount))
         }
 
+        // V0.6: the first LTR/Virtus record *authoring* endpoint - V0.2.2's known gap ("no LTR
+        // record authoring in this MVP") closed for the Lightning payment path specifically.
+        // Accepts a (preimage, signedInvoice) pair the caller obtained by paying a real BOLT-11
+        // invoice with their own Lightning wallet OUT-OF-BAND - this route never sends a Lightning
+        // payment itself (no embedded node/wallet exists in this codebase, see
+        // lapis-net-virtus/build.gradle.kts's header comment on that scope cut). It only verifies
+        // the resulting proof and, if valid, authors and announces the LtrRecord.
+        post("/api/ltr/lightning") {
+            val request = call.receive<NewLightningLtrRequest>()
+
+            val cid = parseCidOrNull(request.cid)
+            if (cid == null) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("cid is not a valid CID"))
+                return@post
+            }
+            val viewId = parseHexPublicKeyOrNull(request.viewIdHex)
+            if (viewId == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("viewIdHex must be a 33-byte compressed secp256k1 public key in hex"),
+                )
+                return@post
+            }
+            val preimage = parseHexBytesOrNull(request.preimageHex, expectedLength = 32)
+            if (preimage == null) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("preimageHex must be exactly 32 bytes in hex"))
+                return@post
+            }
+
+            // The amount is ALWAYS derived from the invoice itself, server-side - never trusted
+            // from a client-supplied field (there is no such field on NewLightningLtrRequest at
+            // all - see that class's doc comment). This is the anti-amount-spoofing discipline
+            // LightningProofVerifier.verify itself also enforces at gossip-validation time; doing
+            // it here too means a bad request fails fast with a clean 400 rather than only being
+            // caught much later at the verify-before-announce step below.
+            val initialValueMsat = LightningProofVerifier.invoiceAmountMsatOrNull(request.signedInvoice)
+            if (initialValueMsat == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("signedInvoice is not a parseable BOLT-11 invoice with a non-null amount"),
+                )
+                return@post
+            }
+
+            // Derived server-side, never trusted from a client-supplied hash - mirrors the amount
+            // discipline immediately above.
+            val paymentHash = MessageDigest.getInstance("SHA-256").digest(preimage)
+            val proof =
+                runCatching { LightningProof(preimage, paymentHash, request.signedInvoice) }.getOrElse {
+                    call.respond(HttpStatusCode.BadRequest, ErrorResponse("invalid Lightning proof fields"))
+                    return@post
+                }
+
+            // initialValueMsat is derived server-side from the invoice's own amount above and is
+            // never client-supplied, but a real BOLT-11 invoice's amount decoder has no upper
+            // bound - an invoice can legally encode a value larger than LtrRecord's own
+            // MIN_INITIAL_VALUE_MSAT..MAX_INITIAL_VALUE_MSAT range (the 21M-BTC-in-msat supply
+            // cap, see that constant's doc comment). LtrRecord.create's init block enforces that
+            // range and throws IllegalArgumentException outside it - wrapped here (mirroring the
+            // LightningProof(...) construction immediately above) so an oversized invoice amount
+            // fails with a clean 400, consistent with this route's other validation-failure
+            // branches, instead of an unsanitized 500 from the global StatusPages handler.
+            val record =
+                runCatching {
+                    LtrRecord.create(
+                        payer = deps.identity.secp256k1KeyPair,
+                        cid = cid,
+                        viewId = viewId,
+                        initialValueMsat = initialValueMsat,
+                        proof = proof,
+                    )
+                }.getOrElse {
+                    call.respond(
+                        HttpStatusCode.BadRequest,
+                        ErrorResponse("invoice amount is outside the supported LTR record range"),
+                    )
+                    return@post
+                }
+
+            // Verify BEFORE announcing - a locally-authored record still goes through the exact
+            // same cryptographic checks LtrGossip.onGossipMessage applies to a gossip-received one
+            // (see that function's doc comment on why this is safe to do synchronously here: pure,
+            // bounded, local computation, no liveness dependency). Never leak raw ACINQ exception
+            // detail into the HTTP response - LightningProofVerifier.verify already never throws,
+            // so a generic message here is the full, deliberate error surface, mirroring the
+            // existing Karma electrum-error sanitization pattern (full detail is not even
+            // available here to log, since verify() itself never exposes the specific failure
+            // reason - see that function's doc comment).
+            if (!LightningProofVerifier.verify(record, proof)) {
+                logger.warn { "rejected a self-authored Lightning-proof LTR record that failed verification" }
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("Lightning proof failed verification"))
+                return@post
+            }
+
+            // C1 fix: deps.virtus.announce now checks LtrRecordIndex.hasLightningPaymentBeenUsed
+            // BEFORE persisting/indexing/publishing a genuinely new record - false here means this
+            // exact (cid, viewId, paymentHash) triple already backs another tracked record (this
+            // payment was already used, whether via an earlier call to this same endpoint or via
+            // gossip), so a repeat POST of the identical (preimage, signedInvoice) pair must not
+            // mint additional LTR weight from the one real payment - see
+            // LtrRecordIndex.hasLightningPaymentBeenUsed's doc comment for the full "spent
+            // payment-hash" reasoning and its documented residual gap.
+            if (!deps.virtus.announce(record)) {
+                logger.warn {
+                    "rejected a self-authored Lightning-proof LTR record - its payment hash was already used " +
+                        "for this cid/view"
+                }
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse(
+                        "this Lightning payment has already been used to back an LTR record for this cid/view",
+                    ),
+                )
+                return@post
+            }
+            val ltrRecordCount = deps.virtus.currentRecords(cid, viewId).size
+            call.respond(
+                NewLightningLtrResponse(
+                    cid = cid.toString(),
+                    initialValueMsat = initialValueMsat,
+                    ltrRecordCount = ltrRecordCount,
+                ),
+            )
+        }
+
         post("/api/trust") {
             val request = call.receive<TrustRequest>()
             val target = parseHexPublicKeyOrNull(request.targetPublicKeyHex)
@@ -486,6 +635,21 @@ private fun parseHexPublicKeyOrNull(hex: String): Secp256k1PublicKey? {
     if (hex.length != 66 || hex.any { it !in HEX_CHARS }) return null
     val bytes = ByteArray(33) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
     return runCatching { Secp256k1PublicKey(bytes) }.getOrNull()
+}
+
+/** Parses [hex] as exactly [expectedLength] raw bytes, or `null` for any malformed input (wrong
+ * length or non-hex characters) - never throws, mirrors [parseHexPublicKeyOrNull]'s established
+ * pattern for this file. Used by `POST /api/ltr/lightning` for `preimageHex` (unlike
+ * [parseHexPublicKeyOrNull], the result is not curve-point-validated - a preimage is an arbitrary
+ * 32-byte value, not a public key). */
+private fun parseHexBytesOrNull(
+    hex: String,
+    expectedLength: Int,
+): ByteArray? {
+    if (hex.length != expectedLength * 2 || hex.any { it !in HEX_CHARS }) return null
+    return runCatching {
+        ByteArray(expectedLength) { i -> hex.substring(i * 2, i * 2 + 2).toInt(16).toByte() }
+    }.getOrNull()
 }
 
 private val HEX_CHARS = "0123456789abcdefABCDEF"

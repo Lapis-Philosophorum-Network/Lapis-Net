@@ -177,3 +177,53 @@ V0.5 is implemented (see `docs/architecture.adoc`'s "Madli: machine-to-
 machine node reputation (V0.5)" section). **The V0.5 milestone is
 complete.** All four of the fach-spec's scoring dimensions (Veritas,
 Virtus, Karma, Madli) are now implemented.
+
+== V0.6 — Lightning proof
+
+Target: close V0.2.1's "Zwei Zahlungswege" gap on the Lightning side — a second, fully
+cryptographically verified `LtrProof` implementation alongside `OnChainProof`, wired into the
+gossip hot path, plus the first LTR record-authoring HTTP endpoint.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.6
+| `lapis-net-virtus`: `LightningProof` data model (`preimage`, `paymentHash`, `signedInvoice` —
+structural shape only, mirroring `OnChainProof`'s constructor discipline) and
+`LightningProofVerifier`, the sole consumer of `lightning-kmp` in this module, performing the full
+verification chain — `sha256(preimage) == paymentHash`, real BOLT-11 parsing + signature
+verification via `Bolt11Invoice.read`, mandatory amount binding (`invoice.amount ==
+record.initialValueMsat`), mandatory recipient binding (`invoice.nodeId == record.viewId` — a
+Lightning node key IS its Lapis viewId, by protocol commitment), and mandatory content binding
+(`invoice.description == canonicalMemo(cid, viewId)`, the anti-replay check) — deliberately never
+checking invoice expiry. `LtrRecordCodec`'s `proofType = 2` (previously reserved, rejected outright)
+is now implemented, with a DoS-guarded, length-validated-before-allocation invoice field.
+`LtrGossip.onGossipMessage` calls `LightningProofVerifier.verify` directly in the gossip hot path —
+a deliberate divergence from `OnChainProof`'s (and Karma/Madli's) "never call a network service
+inside the validator" precedent, safe here because Lightning-proof verification is pure, bounded,
+and local, with zero liveness dependency on anything outside the message bytes. `lapis-net-browser`:
+`POST /api/ltr/lightning`, the first LTR record-authoring endpoint, accepting an
+externally-obtained `(preimage, signedInvoice)` pair (the author paid a real invoice with their own
+wallet out-of-band) and verifying it with the same crypto chain before announcing.
+|===
+
+=== Progress
+
+V0.6 is implemented (see `docs/architecture.adoc`'s "Lightning proof (V0.6)" section). **The V0.6
+milestone is complete**, with one honestly-scoped, deliberate gap carried forward as explicit future
+work:
+
+* **No embedded Lightning node.** Nothing in this codebase runs a real `lightning-kmp` node, holds a
+  channel, or has access to real funds — `LightningProofVerifier` only ever verifies proofs already
+  handed to it, never constructs or sends a payment.
+* **No BOLT-12 Offer/DHT publication, no `invoice_request`/auto-respond flow.** V0.6 only covers the
+  BOLT-11 "pay first, submit proof after" path from the Virtus spec note's "Zwei Zahlungswege"
+  section; the fuller "A. Lightning via BOLT-12 Offer" vision (a view publishing a standing offer
+  other nodes can pay against without out-of-band coordination) remains future work.
+* **No live payment settlement testing.** Every test substitutes a preimage/invoice generated
+  in-process with real `lightning-kmp` calls (fully real cryptography) — only the network settlement
+  event itself (an actual Lightning payment over a real channel) is out of reach in this
+  sandbox/CI, mirroring `ElectrumTimeAnchorSourceTest`'s and Madli's Bitswap-modulation precedent
+  for external payment/network infrastructure. Real embedded-node send/receive testing is future
+  work, likely alongside whichever wave eventually builds the embedded node itself.

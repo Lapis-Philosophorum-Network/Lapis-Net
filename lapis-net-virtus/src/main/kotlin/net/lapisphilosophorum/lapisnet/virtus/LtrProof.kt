@@ -14,10 +14,12 @@ private const val MAX_STRUCTURAL_OUTPUT_INDEX = 100_000
  * A cryptographic proof binding an [net.lapisphilosophorum.lapisnet.virtus.LtrRecord] to a real
  * Bitcoin payment. Sealed so every implementation is enumerable at compile time - see
  * [net.lapisphilosophorum.lapisnet.virtus.LtrRecordCodec]'s `proofType` byte, which switches on
- * the concrete type. A Lightning-based `LtrProof` (planned for a future wave, per the Virtus spec
- * note's "Zwei Zahlungswege" section) is a second, not-yet-built implementation this interface is
- * shaped to accommodate - adding it later means adding a new `proofType` case to the codec, not
- * changing this interface's shape.
+ * the concrete type. Two implementations exist, per the Virtus spec note's "Zwei Zahlungswege"
+ * section: [OnChainProof] (`proofType = 1`, structural-only, no live chain verification - see its
+ * own doc comment) and [net.lapisphilosophorum.lapisnet.virtus.LightningProof] (`proofType = 2`,
+ * V0.6 - fully cryptographically verified, including in the gossip hot path, see that class's and
+ * [net.lapisphilosophorum.lapisnet.virtus.LightningProofVerifier]'s doc comments). Adding either
+ * meant adding a new `proofType` case to the codec, not changing this interface's shape.
  */
 sealed interface LtrProof
 

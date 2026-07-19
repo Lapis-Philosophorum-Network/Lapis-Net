@@ -26,15 +26,20 @@ class MalformedLtrRecordException(
 /** Proof-type discriminator byte for [OnChainProof] - see [LtrRecordCodec]'s class doc comment. */
 private const val PROOF_TYPE_ON_CHAIN: Byte = 1
 
-/** Reserved for a future Lightning-based [LtrProof] (V0.6, per the Virtus spec note's "A.
- * Lightning via BOLT-12 Offer" path) - not implemented in this wave. [LtrRecordCodec.decode] must
- * reject this (and every other) proof type it does not itself implement, rather than silently
- * accepting unknown proof bytes. */
-private const val PROOF_TYPE_LIGHTNING_RESERVED: Byte = 2
+/** Proof-type discriminator byte for [LightningProof] (V0.6) - see [LtrRecordCodec]'s class doc
+ * comment. Was `PROOF_TYPE_LIGHTNING_RESERVED` through V0.5, when no `LightningProof` type existed
+ * yet and [LtrRecordCodec.decode] rejected this value outright; now implemented. */
+private const val PROOF_TYPE_LIGHTNING: Byte = 2
 
 /** Exact encoded length of an [OnChainProof]'s `proofBytes`: `btcTxid(32) | outputIndex(4)`. */
 private const val ON_CHAIN_PROOF_BYTES_SIZE = 36
 private const val BTC_TXID_SIZE = 32
+
+/** Fixed-size prefix of a [LightningProof]'s `proofBytes`, before the variable-length invoice:
+ * `preimage(32) | paymentHash(32) | invoiceLen(2)`. See [LtrRecordCodec]'s class doc comment for
+ * the full layout. */
+private const val LIGHTNING_PROOF_FIXED_PREFIX_SIZE =
+    LightningProof.PREIMAGE_SIZE + LightningProof.PAYMENT_HASH_SIZE + 2
 
 /**
  * Canonical, deterministic byte encoding for [LtrRecord] - used both to build the digest that
@@ -47,11 +52,24 @@ private const val BTC_TXID_SIZE = 32
  * cidLen(2) | cid(cidLen) | initialValueMsat(8) | timestampSeconds(8) | nonce(8) | proofType(1) |
  * proofLen(2) | proofBytes(proofLen)`. [encode] appends the 64-byte signature after that.
  *
- * `proofType = 1` ([PROOF_TYPE_ON_CHAIN]) is the only proof type this wave implements: an
- * [OnChainProof], whose `proofBytes` MUST be exactly [ON_CHAIN_PROOF_BYTES_SIZE] bytes
- * (`btcTxid(32) | outputIndex(4)`) - any other `proofLen` for type 1 is rejected. `proofType = 2`
- * ([PROOF_TYPE_LIGHTNING_RESERVED]) is reserved for a future Lightning proof and, like every other
- * unrecognized value, is rejected outright by [decode] - never silently accepted as opaque bytes.
+ * Two proof types are implemented. `proofType = 1` ([PROOF_TYPE_ON_CHAIN]) is an [OnChainProof],
+ * whose `proofBytes` MUST be exactly [ON_CHAIN_PROOF_BYTES_SIZE] bytes (`btcTxid(32) |
+ * outputIndex(4)`) - any other `proofLen` for type 1 is rejected. `proofType = 2`
+ * ([PROOF_TYPE_LIGHTNING], V0.6) is a [LightningProof], whose `proofBytes` layout is
+ * `preimage(32) | paymentHash(32) | invoiceLen(2) | signedInvoice(invoiceLen)` - `invoiceLen` is
+ * validated against [LightningProof.MAX_SIGNED_INVOICE_BYTES] BEFORE the invoice buffer is
+ * allocated (a DoS guard, mirroring `cidLen`'s handling above), and the total declared `proofLen`
+ * must exactly equal `66 + invoiceLen` - any mismatch (including trailing bytes) is rejected, the
+ * same "never silently truncate or reinterpret" discipline as the type-1 branch. Every other
+ * `proofType` value is rejected outright by [decode] as unknown - never silently accepted as
+ * opaque bytes.
+ *
+ * **No new domain-separation tag needed for [LightningProof].** `proof` is already encoded into
+ * [encodeSignedBody]'s output, so a [LightningProof] is already covered by the existing
+ * `VIRTUS_LTR_RECORD_DOMAIN_TAG` binding on the whole [LtrRecord]. The `signedInvoice`'s own BOLT-
+ * 11 signature is a separate, Lightning-protocol-defined signature verified against Lightning's
+ * own rules ([LightningProofVerifier]), not a LapisNet-internal signing scheme - the two
+ * signatures serve different purposes and neither substitutes for the other.
  */
 object LtrRecordCodec {
     private val MAGIC = "LNLR".toByteArray(Charsets.US_ASCII)
@@ -63,10 +81,12 @@ object LtrRecordCodec {
     /** Cap on an encoded CID's byte length - see [MAX_BODY_SIZE] for why this exists. */
     const val MAX_CID_BYTES = 128
 
-    /** Cap on an encoded proof's byte length - see [MAX_BODY_SIZE]. Generous headroom above
-     * [ON_CHAIN_PROOF_BYTES_SIZE] (36) for a future, larger Lightning proof payload
-     * (preimage + payment hash + a signed BOLT-11/12 invoice, per the Virtus spec note). */
-    const val MAX_PROOF_BYTES = 1024
+    /** Cap on an encoded proof's byte length - see [MAX_BODY_SIZE]. Comfortably exceeds a
+     * [LightningProof]'s worst case (`66 + `[LightningProof.MAX_SIGNED_INVOICE_BYTES]` = 2114`
+     * bytes, per this object's class doc comment) - bumped from the pre-V0.6 value of 1024 (which
+     * only ever needed to cover [ON_CHAIN_PROOF_BYTES_SIZE] = 36) now that a real, larger
+     * Lightning proof payload (preimage + payment hash + a signed BOLT-11 invoice) exists. */
+    const val MAX_PROOF_BYTES = 4096
 
     /** [domainSeparatedDigest][net.lapisphilosophorum.lapisnet.core.crypto.domainSeparatedDigest]
      * treats the whole signed body as a single part, capped at this size - mirrors
@@ -147,8 +167,8 @@ object LtrRecordCodec {
      *
      * @throws MalformedLtrRecordException if the bytes are structurally invalid, including an
      * out-of-range field, trailing bytes after the signature, or an unrecognized `proofType`
-     * (every non-[PROOF_TYPE_ON_CHAIN] value, including the reserved
-     * [PROOF_TYPE_LIGHTNING_RESERVED], is rejected - see this object's class doc comment).
+     * (every value other than [PROOF_TYPE_ON_CHAIN] and [PROOF_TYPE_LIGHTNING] is rejected - see
+     * this object's class doc comment).
      */
     fun decode(bytes: ByteArray): LtrRecord {
         try {
@@ -218,6 +238,17 @@ object LtrRecordCodec {
                 }
                 PROOF_TYPE_ON_CHAIN to out.toByteArray()
             }
+            is LightningProof -> {
+                val invoiceBytes = proof.signedInvoice.toByteArray(Charsets.US_ASCII)
+                val out = ByteArrayOutputStream()
+                DataOutputStream(out).apply {
+                    write(proof.preimage)
+                    write(proof.paymentHash)
+                    writeShort(invoiceBytes.size)
+                    write(invoiceBytes)
+                }
+                PROOF_TYPE_LIGHTNING to out.toByteArray()
+            }
         }
 
     private fun decodeProof(
@@ -238,6 +269,32 @@ object LtrRecordCodec {
                     throw MalformedLtrRecordException("outputIndex out of range: $outputIndex")
                 }
                 OnChainProof(txid, outputIndex)
+            }
+            PROOF_TYPE_LIGHTNING -> {
+                if (proofBytes.size < LIGHTNING_PROOF_FIXED_PREFIX_SIZE) {
+                    throw MalformedLtrRecordException(
+                        "LightningProof payload must be at least $LIGHTNING_PROOF_FIXED_PREFIX_SIZE bytes, " +
+                            "was ${proofBytes.size}",
+                    )
+                }
+                val input = DataInputStream(ByteArrayInputStream(proofBytes))
+                val preimage = ByteArray(LightningProof.PREIMAGE_SIZE).also { input.readFully(it) }
+                val paymentHash = ByteArray(LightningProof.PAYMENT_HASH_SIZE).also { input.readFully(it) }
+                val invoiceLen = input.readUnsignedShort()
+                // Validated BEFORE allocating the invoice buffer - a DoS guard, mirroring cidLen's
+                // handling in encodeSignedBody/decode above.
+                if (invoiceLen !in 1..LightningProof.MAX_SIGNED_INVOICE_BYTES) {
+                    throw MalformedLtrRecordException("invalid signed invoice length: $invoiceLen")
+                }
+                val expectedProofLen = LIGHTNING_PROOF_FIXED_PREFIX_SIZE + invoiceLen
+                if (proofBytes.size != expectedProofLen) {
+                    throw MalformedLtrRecordException(
+                        "LightningProof payload must be exactly $expectedProofLen bytes for a declared " +
+                            "invoiceLen of $invoiceLen, was ${proofBytes.size}",
+                    )
+                }
+                val invoiceBytes = ByteArray(invoiceLen).also { input.readFully(it) }
+                LightningProof(preimage, paymentHash, String(invoiceBytes, Charsets.US_ASCII))
             }
             else -> throw MalformedLtrRecordException("unknown or unsupported proofType: $proofType")
         }
