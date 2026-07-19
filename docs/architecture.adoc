@@ -2,18 +2,21 @@
 
 == Status
 
-V0.3 (V0.2 milestone complete, V0.3 Karma landed): identity layer (V0.1.2),
-P2P node bootstrap (V0.1.3), DHT + Bitswap content storage via Nabu
-(V0.1.4), the Veritas trust-edge grant data model (V0.1.5), the Veritas
-transitive trust path-selection algorithm (V0.1.6), GossipSub propagation +
-Nabu persistence of Veritas grants (V0.1.7), a multi-node CLI demo proving
-the full V0.1 stack end to end (V0.1.8 — V0.1 milestone complete), the
-Virtus/LTR data model with GossipSub propagation + Nabu persistence
-(V0.2.1), a Minimal-Browser MVP — the first real Lapis Net client (V0.2.2 —
-V0.2 milestone complete), and Karma — the third of four scoring dimensions,
-a Bitcoin-anchored, Veritas-weighted one-click "like" (V0.3, see below) —
-are implemented. Remaining modules are still skeletons. This document
-grows as modules gain real implementations.
+V0.4 (V0.1-V0.3 milestones complete, V0.4 Genesis-Bootstrap + Identity
+Hardening landed): identity layer (V0.1.2), P2P node bootstrap (V0.1.3),
+DHT + Bitswap content storage via Nabu (V0.1.4), the Veritas trust-edge
+grant data model (V0.1.5), the Veritas transitive trust path-selection
+algorithm (V0.1.6), GossipSub propagation + Nabu persistence of Veritas
+grants (V0.1.7), a multi-node CLI demo proving the full V0.1 stack end to
+end (V0.1.8 — V0.1 milestone complete), the Virtus/LTR data model with
+GossipSub propagation + Nabu persistence (V0.2.1), a Minimal-Browser MVP —
+the first real Lapis Net client (V0.2.2 — V0.2 milestone complete), Karma —
+the third of four scoring dimensions, a Bitcoin-anchored, Veritas-weighted
+one-click "like" (V0.3 — V0.3 milestone complete), and Genesis-Bootstrap +
+Identity Hardening — real bootstrap configuration, QR-code/deep-link key
+exchange, multi-device self-trust-linking, and keystore encryption at rest
+(V0.4, see below) — are implemented. Remaining modules are still
+skeletons. This document grows as modules gain real implementations.
 
 == Layering
 
@@ -36,7 +39,8 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 
 * `lapis-net-core` — shared abstractions, including the `crypto` package's domain-separated
   digest and public-fingerprint helpers used by all signing code in the project
-* `lapis-net-identity` — identity (implemented in V0.1.2, see below)
+* `lapis-net-identity` — identity (implemented in V0.1.2, see below), now also encrypted at rest
+  (V0.4, see below)
 * `lapis-net-storage` — storage/DHT (Nabu, implemented in V0.1.4, see below)
 * `lapis-net-trust` — Veritas web-of-trust: signed trust-edge grant model (V0.1.5), the transitive
   trust path-selection algorithm (V0.1.6), and GossipSub propagation + Nabu persistence (V0.1.7,
@@ -49,8 +53,10 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
   built on top of either (see Layering above)
 * `lapis-net-browser` — Minimal-Browser MVP: a local, loopback-only Ktor HTTP server embedding a
   real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below), now also wired to Karma
-  (V0.3) — the first real Lapis Net client, application layer (see Layering above)
-* `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below)
+  (V0.3) and to QR/deep-link connect + self-trust-linking (V0.4, see below) — the first real Lapis
+  Net client, application layer (see Layering above)
+* `lapis-net-networking` — libp2p node bootstrap (V0.1.3) and GossipSub pub/sub (V0.1.7, see below),
+  now with operator-configurable bootstrap peers and listen address (V0.4, see below)
 * `lapis-net-test` — shared test fixtures and helpers (not yet consumed by other modules' tests)
 * `lapis-net-cli` — entry point / demo harness, including the multi-node trust-propagation demo
   (V0.1.8, see below)
@@ -751,6 +757,106 @@ regression test proving the leak no longer occurs.
 
 With V0.3 landed, all three of Veritas, Virtus, and Karma — three of the fach-spec's four scoring
 dimensions — are implemented; Madli remains the only one not yet started.
+
+== Genesis-Bootstrap + Identity Hardening (V0.4)
+
+Four bundled deliverables, all about moving from test fixtures toward real users — a real bootstrap
+configuration mechanism, a QR-code/deep-link key exchange flow, multi-device/pseudonym self-trust
+linking, and keystore encryption at rest.
+
+**Real bootstrap setup.** `BootstrapConfig` (`lapis-net-networking`) replaces the old
+`BootstrapPeers.PLACEHOLDER` — a compiled-in list of RFC-5737 documentation-range IPs that could
+never actually be dialed — with operator configuration: a comma-separated `LAPISNET_BOOTSTRAP_PEERS`
+env var and an optional `bootstrap.peers` file (one multiaddr per line, `#`-comments and blank lines
+ignored), merged and capped at `MAX_BOOTSTRAP_PEERS` (64) before any dial is attempted. The libp2p
+listen address is similarly operator-configurable via `LAPISNET_LISTEN_ADDR`, defaulting to
+loopback-ephemeral (unchanged from every prior wave, so all existing tests are unaffected).
+`LapisNode.start()`'s own bootstrap-peers default changed from the placeholder list to `emptyList()`
+— a fresh install with no operator config dials nobody and relies on mDNS/manual
+`POST /api/peers/connect` until a real anchor is supplied. Lapis Net remains fully decentralized: a
+bootstrap peer is only a technical first anchor for mesh entry, never a protocol authority — the
+"genesis node" (the project's first operator) is a social/technical convention, distributed out of
+band (e.g. published on a website, or shared via the QR/deep-link mechanism below), not
+infrastructure the protocol structurally depends on.
+
+**QR-code / deep-link key exchange.** A `lapisnet://connect?maddr=...&pk=...` URI scheme
+(`ConnectUri`, `lapis-net-browser`) carries a dialable multiaddr (including `/p2p/<peerId>`) and a
+compressed secp256k1 public key — purely public data, never signed or authenticated itself; any
+trust decision made after scanning is still a separate, explicitly signed `VeritasGrant`. Rendered as
+a QR code server-side via ZXing (`QrCodeSvg`, hand-built SVG path from the raw bit-matrix — no
+`java.awt`, no raster, no new client-side JavaScript, keeping the V0.2.2 hand-written-JS-only
+discipline intact) and exposed via three new routes: `GET /api/connect/info` (the local node's URI as
+JSON), `GET /api/connect/qr.svg` (the same URI as a scannable image), and `POST /api/connect/uri`
+(parses a scanned/pasted URI and dials the peer). `ConnectUri.parseOrNull` never throws — length
+bound, scheme/host check, hex/curve-point validation — mirroring `parseHexPublicKeyOrNull`'s/
+`parseCidOrNull`'s established never-throw discipline in the same file.
+
+**Multi-device / pseudonym self-trust-linking.** `POST /api/self-link` lets one person link their own
+devices/pseudonyms by reusing the *existing* `VeritasGrant` model verbatim, at
+`trustMicros = MAX_TRUST_MICROS` — no schema change, no new signature domain tag, no gossip-path
+validation change. **This is the wave's central design decision.** It creates no new Sybil attack
+surface on Veritas trust propagation: every credibility/timeline query's path-finding BFS source is
+always the local viewer's own key (`TrustPathFinder.findPath(graph, localIdentity, candidate)`), so a
+self-link only ever propagates the truster's *pre-existing* standing one hop further — it cannot
+manufacture trust a third party didn't already have a path to. A dedicated adversarial regression
+test confirms this: an X→Y self-link announced directly via gossip (simulating a received message
+from an attacker with no relationship to the local viewer) is asserted to leave a post by Y at
+`credibilityLevel == NO_PATH`, not `RESOLVED`. The one genuine residual risk is at the UI/UX level,
+not the data model: the "This is also me (link device)" framing is designed to lower a user's guard
+specifically for identity claims, which an attacker could exploit via social engineering (tricking a
+trusted user into scanning a QR code framed as "link your new phone" for a key that isn't actually
+theirs) — mitigated with an explicit warning in the self-link UI ("exactly as strong a trust statement
+as rating someone 100% trusted... never link a key someone else asked you to add") rather than
+silently left as a gap.
+
+**Keystore encryption at rest.** `KeystoreFileFormat` gained a v2 file format
+(`lapis-net-identity`): Argon2id (BouncyCastle's `Argon2BytesGenerator`, already on the classpath —
+no new dependency; memory=64MiB, iterations=3, parallelism=1, 16-byte salt) derives a 32-byte AES
+key from an operator passphrase; AES-256-GCM (12-byte nonce, 128-bit tag) encrypts the existing
+198-byte v1 plaintext keystore encoding unchanged, so every pre-existing structural/signature
+cross-check in `decode()` still runs, just after decryption instead of before it. **The full
+43-byte file header (magic, version, KDF id, Argon2 cost parameters, salt, nonce) is used as the GCM
+AAD, read verbatim from the raw on-disk bytes on decrypt — never reconstructed from parsed fields —
+so any tamper anywhere in the header or ciphertext, including an attempted downgrade of the Argon2
+cost parameters to cheapen brute-forcing, fails authentication deterministically.** The Argon2 cost
+parameters read from a v2 file's header are additionally sanity-capped (16× the defaults) *before*
+the expensive KDF call, so a corrupted or malicious file can't turn a single load attempt into an
+unbounded-memory/CPU hang ahead of the auth-tag check. `FileIdentityRepository` gained a
+`PassphraseProvider` functional interface — a `null` provider (the default) preserves the exact
+legacy unencrypted v1 behavior every prior test relies on — plus transparent, atomic v1-to-v2
+migration on load (re-encrypts a legacy file the moment a passphrase becomes available, going through
+the same temp-file + atomic-rename write path every save already used, so a crash mid-migration can
+never corrupt or lose the identity). The passphrase is sourced from `LAPISNET_KEYSTORE_PASSPHRASE` or
+an interactive console prompt; a headless process with neither falls back to legacy v1 plaintext with
+a warning log rather than failing outright, keeping every existing CI run and demo working
+unmodified — an explicit, documented trade-off (encryption is opt-in at the process entry points
+this wave, not yet mandatory).
+
+**Review findings this wave.** A single review + security round both approved with no CRITICAL/MAJOR
+findings — the AAD binding was independently verified to defeat every tamper/downgrade/cross-file
+scenario constructed, and the self-link Sybil-resistance claim was independently confirmed to hold
+algorithmically. The MINOR findings were fixed directly: the Argon2 `parallelism` header byte gained
+the same 16×-default cap already applied to memory/iterations (with dedicated regression tests
+proving the cap fires before Argon2 ever runs, for both fields), and the self-link UI's disclosure
+was strengthened with the social-engineering warning described above.
+
+**Known, deliberately accepted gaps:**
+
+* No in-app camera capture — the browser is a local HTTP UI, not a mobile app; the QR is generated
+  and displayed locally, and the *other* party scans with their own phone and pastes/opens the
+  resulting URI. No OS-level `lapisnet://` deep-link registration.
+* Self-linking issues only the local half of a mutual link — full bidirectional device-linking
+  requires each device to scan the other and call `/api/self-link` once; no automated handshake.
+* No live reachability check that an advertised multiaddr is actually externally dialable — NAT
+  traversal remains the open research item noted since V0.1.3.
+* No rate limiting on any of the new routes — the same accepted trade-off as every existing route
+  (loopback-only, single-user pilot server).
+* Keystore encryption is opt-in at the process entry points (see above) rather than mandatory.
+* `FileIdentityRepository.list()` still fails loudly on a v2 keystore it can't decrypt (wrong/absent
+  passphrase), consistent with its pre-existing "one bad file fails the whole call" behavior.
+
+With V0.4 landed, the protocol has moved from a headless, test-fixture-only prototype toward
+something a real (non-test) user could actually run and be reachable through.
 
 == Diagrams
 

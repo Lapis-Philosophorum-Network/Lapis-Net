@@ -103,3 +103,34 @@ anchored one-click likes (V0.3)" section). **The V0.3 milestone is
 complete.** Three of the fach-spec's four scoring dimensions (Veritas,
 Virtus, Karma) are now implemented; Madli remains the only one not yet
 started.
+
+== V0.4 — Genesis-Bootstrap + Identity Hardening
+
+Target: move from test fixtures toward real users. Bundles four related
+items that all circle the same theme: real bootstrap configuration, a
+QR-code/deep-link key exchange flow, multi-device/pseudonym self-trust
+linking, and keystore encryption at rest.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.4
+| `BootstrapConfig` (`lapis-net-networking`): env-var + file-based
+bootstrap-peer resolution and a configurable libp2p listen address,
+replacing the old RFC-5737 placeholder list. `ConnectUri`/`QrCodeSvg`
+(`lapis-net-browser`): a `lapisnet://connect` URI scheme plus a
+server-side-rendered SVG QR code and three new HTTP routes so two real
+users can connect without hand-copying multiaddrs. `POST
+/api/self-link`: multi-device/pseudonym linking that reuses the
+existing `VeritasGrant` model verbatim at maximum trust — no schema
+change, no new Sybil attack surface. `KeystoreEncryption`/`KeystoreFileFormat`
+v2 (`lapis-net-identity`): Argon2id + AES-256-GCM keystore encryption
+at rest with the full file header bound as GCM AAD, and transparent,
+atomic v1-to-v2 migration.
+|===
+
+=== Progress
+
+V0.4 is implemented (see `docs/architecture.adoc`'s "Genesis-Bootstrap +
+Identity Hardening (V0.4)" section). **The V0.4 milestone is complete.**
