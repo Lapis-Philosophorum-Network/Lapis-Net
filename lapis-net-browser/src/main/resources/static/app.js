@@ -23,6 +23,26 @@ const peerCountEl = document.getElementById("peer-count");
 const connectForm = document.getElementById("connect-form");
 const connectMultiaddrInput = document.getElementById("connect-multiaddr");
 const connectStatusEl = document.getElementById("connect-status");
+
+// V0.4 connect panel (QR / deep-link key exchange, Part B) + self-trust-linking (Part C).
+const connectUriDisplayEl = document.getElementById("connect-uri-display");
+const connectUriCopyButton = document.getElementById("connect-uri-copy");
+const connectUriCopyStatusEl = document.getElementById("connect-uri-copy-status");
+const connectUriForm = document.getElementById("connect-uri-form");
+const connectUriInputEl = document.getElementById("connect-uri-input");
+const connectUriStatusEl = document.getElementById("connect-uri-status");
+const connectUriResultEl = document.getElementById("connect-uri-result");
+const connectUriResultPeerEl = document.getElementById("connect-uri-result-peer");
+const connectUriRateButton = document.getElementById("connect-uri-rate-button");
+const connectUriSelfLinkButton = document.getElementById("connect-uri-self-link-button");
+const connectUriActionStatusEl = document.getElementById("connect-uri-action-status");
+const connectUriRateForm = document.getElementById("connect-uri-rate-form");
+const connectUriRateTargetInput = document.getElementById("connect-uri-rate-target");
+const connectUriRateSlider = document.getElementById("connect-uri-rate-slider");
+const connectUriRateSliderValueEl = document.getElementById("connect-uri-rate-slider-value");
+const connectUriRateCommentInput = document.getElementById("connect-uri-rate-comment");
+const connectUriRateStatusEl = document.getElementById("connect-uri-rate-status");
+
 const composeTextEl = document.getElementById("compose-text");
 const composeCountEl = document.getElementById("compose-count");
 const composeSubmitButton = document.getElementById("compose-submit");
@@ -282,6 +302,120 @@ refreshButton.addEventListener("click", () => {
   loadPeers();
 });
 
+// --- V0.4 connect panel: QR / deep-link key exchange (Part B) + self-trust-linking (Part C) ---
+
+async function loadConnectInfo() {
+  try {
+    const info = await fetchJson("/api/connect/info");
+    connectUriDisplayEl.value = info.uri;
+  } catch (error) {
+    connectUriDisplayEl.value = "";
+    connectUriDisplayEl.placeholder = `connect link unavailable: ${error.message}`;
+  }
+}
+
+connectUriCopyButton.addEventListener("click", async () => {
+  if (!connectUriDisplayEl.value) return;
+  try {
+    await navigator.clipboard.writeText(connectUriDisplayEl.value);
+    connectUriCopyStatusEl.textContent = "copied";
+  } catch (error) {
+    // Clipboard API can be unavailable (no secure context, no permission) - fall back to a
+    // plain text-selection so the user can still copy manually via keyboard/right-click.
+    connectUriDisplayEl.select();
+    connectUriCopyStatusEl.textContent = "select-to-copy (clipboard unavailable)";
+  }
+});
+
+// Resets the connect-uri-result panel back to its pre-connect state - shared by every path that
+// starts a fresh "paste a link" attempt, so a previous connect's peer/rate-form never lingers
+// stale on screen.
+function resetConnectUriResult() {
+  connectUriResultEl.hidden = true;
+  connectUriResultPeerEl.textContent = "";
+  connectUriActionStatusEl.textContent = "";
+  connectUriRateForm.hidden = true;
+  connectUriRateStatusEl.textContent = "";
+}
+
+connectUriForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const uri = connectUriInputEl.value.trim();
+  if (uri.length === 0) return;
+  connectUriStatusEl.textContent = "connecting…";
+  resetConnectUriResult();
+  try {
+    const result = await fetchJson("/api/connect/uri", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uri }),
+    });
+    connectUriStatusEl.textContent = "connected";
+    connectUriInputEl.value = "";
+    await loadPeers();
+
+    connectUriResultPeerEl.textContent = `Connected to ${shortFingerprint(result.peerId)}`;
+    connectUriResultEl.hidden = false;
+    connectUriResultEl.dataset.publicKeyHex = result.publicKeyHex;
+    flashItem(connectUriResultEl);
+  } catch (error) {
+    connectUriStatusEl.textContent = `failed: ${error.message}`;
+  }
+});
+
+connectUriRateButton.addEventListener("click", () => {
+  const publicKeyHex = connectUriResultEl.dataset.publicKeyHex;
+  if (!publicKeyHex) return;
+  connectUriRateTargetInput.value = publicKeyHex;
+  connectUriRateForm.hidden = !connectUriRateForm.hidden;
+});
+
+connectUriRateSlider.addEventListener("input", () => {
+  connectUriRateSliderValueEl.textContent = `${connectUriRateSlider.value}%`;
+});
+
+connectUriRateForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  connectUriRateStatusEl.textContent = "submitting…";
+  try {
+    const trustMicros = Math.round((Number(connectUriRateSlider.value) / 100) * 1000000);
+    await fetchJson("/api/trust", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        targetPublicKeyHex: connectUriRateTargetInput.value,
+        trustMicros,
+        comment: connectUriRateCommentInput.value,
+      }),
+    });
+    connectUriRateStatusEl.textContent = "saved";
+    flashItem(connectUriResultEl);
+  } catch (error) {
+    connectUriRateStatusEl.textContent = `failed: ${error.message}`;
+  }
+});
+
+connectUriSelfLinkButton.addEventListener("click", async () => {
+  const publicKeyHex = connectUriResultEl.dataset.publicKeyHex;
+  if (!publicKeyHex) return;
+  connectUriSelfLinkButton.disabled = true;
+  connectUriActionStatusEl.textContent = "linking…";
+  try {
+    await fetchJson("/api/self-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetPublicKeyHex: publicKeyHex, label: "device" }),
+    });
+    connectUriActionStatusEl.textContent = "linked";
+    flashItem(connectUriResultEl);
+    await loadTimeline();
+  } catch (error) {
+    connectUriActionStatusEl.textContent = `failed: ${error.message}`;
+    connectUriSelfLinkButton.disabled = false;
+  }
+});
+
 loadIdentity();
 loadPeers();
 loadTimeline();
+loadConnectInfo();

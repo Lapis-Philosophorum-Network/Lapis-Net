@@ -5,8 +5,22 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.collections.shouldNotBeEmpty
 import io.kotest.matchers.shouldNotBe
+import io.libp2p.core.PeerId
+import io.libp2p.core.multiformats.Multiaddr
 import io.libp2p.core.multiformats.Protocol
 import net.lapisphilosophorum.lapisnet.identity.DualKeyIdentity
+
+/** Unreachable-but-syntactically-valid bootstrap addresses for [LapisNodeLifecycleTest]'s
+ * "unreachable bootstrap peers must never block startup" case - RFC 5737 documentation-range IPs
+ * (`203.0.113.0/24`) paired with a freshly-generated random [PeerId], mirroring the retired
+ * `BootstrapPeers.PLACEHOLDER`'s exact construction (see V0.4's BootstrapConfig, which replaced
+ * that hardcoded production constant with real operator configuration - this test still needs
+ * *some* guaranteed-unreachable multiaddr, which is a purely local test concern, not a production
+ * default). */
+private fun unreachableBootstrapMultiaddrs(): List<Multiaddr> =
+    listOf("203.0.113.10", "203.0.113.11").map { ip ->
+        Multiaddr("/ip4/$ip/tcp/4001").withP2P(PeerId.random())
+    }
 
 class LapisNodeLifecycleTest :
     FunSpec({
@@ -42,10 +56,10 @@ class LapisNodeLifecycleTest :
             node.discoveredPeers().shouldBeEmpty()
         }
 
-        test("a node with only placeholder bootstrap peers still starts within the timeout") {
+        test("a node with only unreachable bootstrap peers still starts within the timeout") {
             val node = newNode()
             shouldNotThrowAny {
-                node.start(bootstrapPeers = BootstrapPeers.PLACEHOLDER)
+                node.start(bootstrapPeers = unreachableBootstrapMultiaddrs())
             }
         }
 

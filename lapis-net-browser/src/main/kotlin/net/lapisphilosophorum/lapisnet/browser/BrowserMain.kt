@@ -2,7 +2,10 @@ package net.lapisphilosophorum.lapisnet.browser
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import net.lapisphilosophorum.lapisnet.identity.FileIdentityRepository
+import net.lapisphilosophorum.lapisnet.identity.PassphraseProvider
 import net.lapisphilosophorum.lapisnet.identity.defaultIdentityDirectory
+import net.lapisphilosophorum.lapisnet.identity.resolveKeystorePassphrase
+import net.lapisphilosophorum.lapisnet.networking.BootstrapConfig
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CountDownLatch
@@ -17,19 +20,60 @@ private fun defaultBrowserDataDirectory(): Path {
     return Path.of(home, "browser-storage")
 }
 
+/**
+ * [PassphraseProvider] for a real process entry point (V0.4): defers to
+ * [resolveKeystorePassphrase] (env var, else interactive console, else `null`) and, on `null`,
+ * logs a prominent warning rather than failing - a headless process with neither an env var nor a
+ * console (e.g. this project's own CI/demo runs) must keep working exactly as it did before V0.4,
+ * just with the identity stored unencrypted (legacy v1 keystore, POSIX permissions only), never
+ * hard-failing on a missing passphrase.
+ */
+private fun warningPassphraseProvider(): PassphraseProvider =
+    PassphraseProvider {
+        val passphrase = resolveKeystorePassphrase()
+        if (passphrase == null) {
+            logger.warn {
+                "no keystore passphrase available (set LAPISNET_KEYSTORE_PASSPHRASE, or run with an " +
+                    "interactive console) - identity will be stored UNENCRYPTED on disk (legacy v1 " +
+                    "keystore format, protected only by POSIX file permissions)"
+            }
+        }
+        passphrase
+    }
+
 fun main() {
-    logger.info { "Starting Lapis Net Browser (V0.2.2 Minimal-Browser MVP)" }
+    logger.info { "Starting Lapis Net Browser (V0.4 Genesis-Bootstrap + Identity Hardening)" }
 
     // Load-or-generate the identity exactly like LapisNetCli.runIdentityAndStorageDemo() does -
     // this process holds the same kind of real signing key, so identity handling must be
     // consistent with the CLI's established, permission-hardened FileIdentityRepository path.
-    val repository = FileIdentityRepository(defaultIdentityDirectory())
+    // As of V0.4, a real passphrase (env var or interactive console) enables encryption at rest -
+    // see warningPassphraseProvider()'s doc comment for the headless/no-passphrase fallback.
+    val repository = FileIdentityRepository(defaultIdentityDirectory(), warningPassphraseProvider())
     val identity = repository.loadDefault() ?: repository.generateAndSave()
 
     val dataDirectory = defaultBrowserDataDirectory()
     Files.createDirectories(dataDirectory)
 
-    val server = BrowserServer.start(identity = identity, dataDirectory = dataDirectory)
+    val bootstrapPeers = BootstrapConfig.resolve()
+    val listenAddress = BootstrapConfig.resolveListenAddress()
+    if (bootstrapPeers.isEmpty() && listenAddress.toString().contains("/127.0.0.1/")) {
+        logger.warn {
+            "no bootstrap peers configured (set ${BootstrapConfig.ENV_VAR} or a bootstrap.peers file) and " +
+                "listen address is loopback-only (set ${BootstrapConfig.LISTEN_ENV_VAR} for a real, " +
+                "reachable address) - this node will only ever reach peers via mDNS or a manual " +
+                "POST /api/peers/connect"
+        }
+    }
+    logger.info { "resolved ${bootstrapPeers.size} bootstrap peer(s); libp2p listen address: $listenAddress" }
+
+    val server =
+        BrowserServer.start(
+            identity = identity,
+            bootstrapPeers = bootstrapPeers,
+            listenAddress = listenAddress,
+            dataDirectory = dataDirectory,
+        )
 
     println("Lapis Net Browser is running.")
     println("Open http://127.0.0.1:${server.boundPort} in your browser.")

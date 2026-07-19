@@ -27,6 +27,52 @@
 </header>
 
 <main>
+  <section id="connect-panel">
+    <h2>Connect a device or person</h2>
+    <p class="connect-notice">Show this code to another device or person to let them connect to you. It contains only your public address and key — never a secret.</p>
+    <div id="connect-panel-body">
+      <div id="connect-qr-wrap">
+        <img id="connect-qr" alt="Scan to connect to this node" src="/api/connect/qr.svg" />
+      </div>
+      <div id="connect-share">
+        <label for="connect-uri-display">Your connect link</label>
+        <input type="text" id="connect-uri-display" readonly />
+        <button type="button" id="connect-uri-copy" class="btn-secondary">Copy</button>
+        <span id="connect-uri-copy-status"></span>
+      </div>
+    </div>
+    <form id="connect-uri-form">
+      <label for="connect-uri-input">Paste a connect link to connect to someone</label>
+      <input type="text" id="connect-uri-input" placeholder="lapisnet://connect?maddr=...&amp;pk=..." />
+      <button type="submit" class="btn-secondary">Connect</button>
+      <span id="connect-uri-status"></span>
+    </form>
+    <div id="connect-uri-result" hidden>
+      <span id="connect-uri-result-peer"></span>
+      <div id="connect-uri-actions">
+        <button type="button" id="connect-uri-rate-button" class="btn-secondary">Rate this person</button>
+        <button type="button" id="connect-uri-self-link-button" class="btn-secondary">This is also me (link device)</button>
+      </div>
+      <p class="self-link-notice">Linking says these two identities are the same person. It's a public, signed statement — exactly as strong as rating someone 100% trusted. Only use this for a device or key that is truly your own. Never link a key someone else asked you to "just add as your other device."</p>
+      <span id="connect-uri-action-status"></span>
+      <form id="connect-uri-rate-form" hidden>
+        <input type="hidden" id="connect-uri-rate-target" />
+        <p class="trust-form-notice">This is a public, signed statement under your own identity. You're accountable for this judgment — not for what they do afterward.</p>
+        <label>
+          Trust: <span id="connect-uri-rate-slider-value">50%</span>
+          <span class="trust-slider-row">
+            <span class="trust-slider-min">Distrust</span>
+            <input type="range" id="connect-uri-rate-slider" class="trust-slider" min="0" max="100" value="50" />
+            <span class="trust-slider-max">Trust fully</span>
+          </span>
+        </label>
+        <input type="text" id="connect-uri-rate-comment" class="trust-comment" placeholder="comment (optional)" />
+        <button type="submit">Submit</button>
+        <span id="connect-uri-rate-status" class="trust-status"></span>
+      </form>
+    </div>
+  </section>
+
   <section id="compose-panel">
     <textarea id="compose-text" maxlength="2048" placeholder="What's happening?"></textarea>
     <div id="compose-footer">

@@ -6,7 +6,9 @@ import io.libp2p.core.PeerInfo
 import io.libp2p.core.pubsub.ValidationResult
 import net.lapisphilosophorum.lapisnet.identity.DualKeyIdentity
 import net.lapisphilosophorum.lapisnet.identity.FileIdentityRepository
+import net.lapisphilosophorum.lapisnet.identity.PassphraseProvider
 import net.lapisphilosophorum.lapisnet.identity.defaultIdentityDirectory
+import net.lapisphilosophorum.lapisnet.identity.resolveKeystorePassphrase
 import net.lapisphilosophorum.lapisnet.networking.GossipPubSub
 import net.lapisphilosophorum.lapisnet.networking.LapisNode
 import net.lapisphilosophorum.lapisnet.networking.deriveLibp2pPeerId
@@ -38,13 +40,34 @@ fun main() {
 }
 
 /**
+ * [PassphraseProvider] for a real process entry point (V0.4): defers to
+ * [resolveKeystorePassphrase] (env var, else interactive console, else `null`) and, on `null`,
+ * logs a warning rather than failing - a headless run (this project's own CI/demo runs, which have
+ * neither an env var nor a console) must keep working exactly as it did before V0.4, just with the
+ * identity stored unencrypted (legacy v1 keystore, POSIX permissions only). Mirrors
+ * `lapis-net-browser`'s `BrowserMain.warningPassphraseProvider` exactly.
+ */
+private fun warningPassphraseProvider(): PassphraseProvider =
+    PassphraseProvider {
+        val passphrase = resolveKeystorePassphrase()
+        if (passphrase == null) {
+            logger.warn {
+                "no keystore passphrase available (set LAPISNET_KEYSTORE_PASSPHRASE, or run with an " +
+                    "interactive console) - identity will be stored UNENCRYPTED on disk (legacy v1 " +
+                    "keystore format, protected only by POSIX file permissions)"
+            }
+        }
+        passphrase
+    }
+
+/**
  * Single-node identity + local storage demo (V0.1.4-era content, unchanged in substance beyond
  * being extracted into its own function): proves a loaded/generated identity round-trips through
  * Nabu's local blockstore. No network exercise here - see [runMultiNodeTrustPropagationDemo] for
  * the multi-node GossipSub/Veritas harness.
  */
 fun runIdentityAndStorageDemo() {
-    val repository = FileIdentityRepository(defaultIdentityDirectory())
+    val repository = FileIdentityRepository(defaultIdentityDirectory(), warningPassphraseProvider())
     val identity = repository.loadDefault() ?: repository.generateAndSave()
 
     println("secp256k1 identity fingerprint: ${identity.secp256k1KeyPair.publicKey.fingerprint()}")

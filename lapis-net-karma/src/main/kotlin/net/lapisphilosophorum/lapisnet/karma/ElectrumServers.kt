@@ -18,10 +18,11 @@ data class ElectrumServerConfig(
 
 /**
  * Operator-configured Electrum server list for [ElectrumTimeAnchorSource]. [PLACEHOLDER] is
- * deliberately an EMPTY list, mirroring
- * [net.lapisphilosophorum.lapisnet.networking.BootstrapPeers.PLACEHOLDER]'s established
- * "clearly-marked stand-in, not a real value" precedent (see that constant's doc comment, and
- * [net.lapisphilosophorum.lapisnet.browser.PLACEHOLDER_VIEW_ID]'s analogous one).
+ * deliberately an EMPTY list - a "clearly-marked stand-in, not a real value", the same convention
+ * [net.lapisphilosophorum.lapisnet.browser.PLACEHOLDER_VIEW_ID] follows, and the same convention
+ * the retired `BootstrapPeers.PLACEHOLDER` followed before V0.4 replaced it with real,
+ * externally-configurable operator config (see
+ * [net.lapisphilosophorum.lapisnet.networking.BootstrapConfig]).
  *
  * **Why empty, not a hardcoded list of real public Electrum servers.** During this wave's
  * implementation, this codebase's sandboxed build/dev environment was confirmed to allow only

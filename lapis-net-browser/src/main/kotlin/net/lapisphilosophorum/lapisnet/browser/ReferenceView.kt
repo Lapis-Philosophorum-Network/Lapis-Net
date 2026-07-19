@@ -4,17 +4,17 @@ import net.lapisphilosophorum.lapisnet.identity.Secp256k1PublicKey
 
 /**
  * A single, hardcoded "view" identity - the `viewId` every [net.lapisphilosophorum.lapisnet.virtus.LtrRecord]
- * lookup in this module uses (see [BrowserApi]'s `/api/timeline` handler). Mirrors
- * [net.lapisphilosophorum.lapisnet.networking.BootstrapPeers.PLACEHOLDER]'s documented precedent
- * exactly: a clearly-marked stand-in for real infrastructure that does not exist yet, not
- * something anyone should mistake for a production value.
+ * lookup in this module uses (see [BrowserApi]'s `/api/timeline` handler). A clearly-marked
+ * stand-in for real infrastructure that does not exist yet, not something anyone should mistake
+ * for a production value - the same convention the pre-V0.4 `BootstrapPeers.PLACEHOLDER` followed
+ * before V0.4 replaced it with real, externally-configurable bootstrap config (see
+ * [net.lapisphilosophorum.lapisnet.networking.BootstrapConfig]).
  *
  * The Virtus spec models "views" as independent, potentially many, sort-weight namespaces a
  * `(cid, viewId)` pair's accumulated LTR weight is scoped to (see
  * [net.lapisphilosophorum.lapisnet.virtus.LtrRecord]'s doc comment). The Minimal-Browser MVP does
  * not implement multiple views, view registration, or view discovery - it is a single-view
- * pilot-stage stand-in, exactly analogous to how [net.lapisphilosophorum.lapisnet.networking.BootstrapPeers]
- * is a stand-in for real bootstrap infrastructure that hasn't been built yet.
+ * pilot-stage stand-in.
  *
  * [PLACEHOLDER_VIEW_ID] is the public key of a real, once-generated
  * [net.lapisphilosophorum.lapisnet.identity.Secp256k1KeyPair] (via the same
@@ -27,8 +27,7 @@ import net.lapisphilosophorum.lapisnet.identity.Secp256k1PublicKey
  * [Secp256k1PublicKey] to key LTR lookups by, never to sign or authenticate anything itself.
  *
  * TODO(post-pilot, before any real multi-view deployment): replace this with real view
- * registration/discovery, matching [net.lapisphilosophorum.lapisnet.networking.BootstrapPeers]'s
- * own documented TODO for real bootstrap infrastructure.
+ * registration/discovery.
  */
 val PLACEHOLDER_VIEW_ID: Secp256k1PublicKey =
     Secp256k1PublicKey(

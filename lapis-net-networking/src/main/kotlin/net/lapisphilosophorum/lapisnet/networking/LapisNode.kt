@@ -99,7 +99,7 @@ class LapisNode private constructor(
     }
 
     fun start(
-        bootstrapPeers: List<Multiaddr> = BootstrapPeers.PLACEHOLDER,
+        bootstrapPeers: List<Multiaddr> = emptyList(),
         timeout: Duration = DEFAULT_TIMEOUT,
     ) {
         awaitOrWrap("start host", timeout) { host.start() }

@@ -27,6 +27,7 @@ dependencies {
     implementation(rootProject.libs.ktor.server.status.pages)
     implementation(rootProject.libs.ktor.serialization.kotlinx.json)
     implementation(rootProject.libs.kotlinx.serialization.json)
+    implementation(rootProject.libs.zxing.core)
 
     runtimeOnly(rootProject.libs.logback.classic)
 

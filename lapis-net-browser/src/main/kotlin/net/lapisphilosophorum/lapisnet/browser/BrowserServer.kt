@@ -115,7 +115,11 @@ class BrowserServer private constructor(
          * [net.lapisphilosophorum.lapisnet.cli.LapisNetCli]'s established wiring pattern exactly)
          * plus the embedded HTTP server. [httpHost] MUST stay `127.0.0.1` - see this class's doc
          * comment. [httpPort] `0` requests an OS-assigned port, read back via the returned
-         * server's [boundPort].
+         * server's [boundPort]. [listenAddress] is the *libp2p* listen address (separate from
+         * [httpHost]/[httpPort], which is the loopback-only HTTP admin bind) - defaults to loopback
+         * with an OS-assigned port, matching [LapisNode.create]'s own default, so a node is not
+         * reachable from other machines unless an operator explicitly configures otherwise (V0.4,
+         * see [net.lapisphilosophorum.lapisnet.networking.BootstrapConfig.resolveListenAddress]).
          *
          * [KarmaAnchorCache] is built here over [karmaAnchorSource], which defaults to a real
          * [ElectrumTimeAnchorSource] using its default, no-argument constructor - i.e.
@@ -136,6 +140,7 @@ class BrowserServer private constructor(
             httpHost: String = "127.0.0.1",
             httpPort: Int = DEFAULT_BROWSER_HTTP_PORT,
             bootstrapPeers: List<Multiaddr> = emptyList(),
+            listenAddress: Multiaddr = Multiaddr("/ip4/127.0.0.1/tcp/0"),
             dataDirectory: Path,
             karmaAnchorSource: BitcoinTimeAnchorSource = ElectrumTimeAnchorSource(),
         ): BrowserServer {
@@ -144,7 +149,7 @@ class BrowserServer private constructor(
                     "(this process holds a real signing key and must never be network-reachable)"
             }
 
-            val node = LapisNode.create(identity)
+            val node = LapisNode.create(identity, listenAddress)
             node.start(bootstrapPeers = bootstrapPeers)
 
             val storage = NabuStorage.attach(node, dataDirectory)

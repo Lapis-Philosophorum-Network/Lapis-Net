@@ -2,6 +2,7 @@ package net.lapisphilosophorum.lapisnet.browser
 
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.ipfs.cid.Cid
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.serialization.kotlinx.json.json
 import io.ktor.server.application.Application
@@ -11,6 +12,7 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.statuspages.StatusPages
 import io.ktor.server.request.receive
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.routing
@@ -29,6 +31,7 @@ import net.lapisphilosophorum.lapisnet.trust.MIN_TRUST_MICROS
 import net.lapisphilosophorum.lapisnet.trust.TrustGraph
 import net.lapisphilosophorum.lapisnet.trust.VeritasGossip
 import net.lapisphilosophorum.lapisnet.trust.VeritasGrant
+import net.lapisphilosophorum.lapisnet.trust.VeritasGrantCodec
 import net.lapisphilosophorum.lapisnet.virtus.LtrGossip
 
 private val logger = KotlinLogging.logger {}
@@ -116,6 +119,36 @@ data class ConnectPeerResponse(
 @Serializable
 data class ErrorResponse(
     val error: String,
+)
+
+@Serializable
+data class ConnectInfoResponse(
+    val multiaddr: String,
+    val publicKeyHex: String,
+    val uri: String,
+)
+
+@Serializable
+data class ConnectUriRequest(
+    val uri: String,
+)
+
+@Serializable
+data class ConnectUriResponse(
+    val peerId: String,
+    val publicKeyHex: String,
+)
+
+@Serializable
+data class SelfLinkRequest(
+    val targetPublicKeyHex: String,
+    val label: String = "",
+)
+
+@Serializable
+data class SelfLinkResponse(
+    val target: String,
+    val trustMicros: Int,
 )
 
 /** Marker text returned by `GET /api/timeline` in place of a post's real text when the local
@@ -350,6 +383,94 @@ fun Application.installBrowserApi(deps: BrowserApiDependencies) {
                 }
         }
 
+        // --- V0.4: QR-code / deep-link key exchange (Part B) + self-trust-linking (Part C) ---
+
+        get("/api/connect/info") {
+            val maddr = deps.node.bestDialableMultiaddr()
+            val pkHex =
+                deps.identity.secp256k1KeyPair.publicKey.bytes
+                    .toHexString()
+            if (maddr == null) {
+                call.respond(ConnectInfoResponse(multiaddr = "", publicKeyHex = pkHex, uri = ""))
+                return@get
+            }
+            val uri = ConnectUri.of(maddr, deps.identity.secp256k1KeyPair.publicKey).toUriString()
+            call.respond(ConnectInfoResponse(multiaddr = maddr.toString(), publicKeyHex = pkHex, uri = uri))
+        }
+
+        get("/api/connect/qr.svg") {
+            val maddr = deps.node.bestDialableMultiaddr()
+            if (maddr == null) {
+                call.respond(HttpStatusCode.ServiceUnavailable, ErrorResponse("no dialable listen address yet"))
+                return@get
+            }
+            val uri = ConnectUri.of(maddr, deps.identity.secp256k1KeyPair.publicKey).toUriString()
+            val svg = QrCodeSvg.render(uri)
+            call.respondText(svg, ContentType.Image.SVG)
+        }
+
+        post("/api/connect/uri") {
+            val request = call.receive<ConnectUriRequest>()
+            val parsed = ConnectUri.parseOrNull(request.uri)
+            if (parsed == null) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("not a valid lapisnet://connect URI"))
+                return@post
+            }
+            val peerId = parsed.multiaddr.getPeerId()!!
+            runCatching { deps.node.connect(PeerInfo(peerId, listOf(parsed.multiaddr))) }
+                .onSuccess {
+                    call.respond(
+                        ConnectUriResponse(
+                            peerId = peerId.toBase58(),
+                            publicKeyHex = parsed.publicKey.bytes.toHexString(),
+                        ),
+                    )
+                }.onFailure { error ->
+                    call.respond(HttpStatusCode.BadRequest, ErrorResponse("failed to connect: ${error.message}"))
+                }
+        }
+
+        // Reuses the EXISTING VeritasGrant model verbatim at MAX_TRUST_MICROS - no schema change,
+        // no new signature domain tag, no special gossip-path validation (see architecture.adoc
+        // "Self-trust linking (V0.4)"). This creates NO new Sybil attack surface: an A->B self-link
+        // only propagates A's pre-existing standing one hop further; it cannot manufacture trust a
+        // third party didn't already have a path to, and TrustPathFinder's shortest-path rule makes
+        // the near (already-known) edge decisive over any far self-linked sock-puppet edge.
+        post("/api/self-link") {
+            val request = call.receive<SelfLinkRequest>()
+            val target = parseHexPublicKeyOrNull(request.targetPublicKeyHex)
+            if (target == null) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    ErrorResponse("targetPublicKeyHex must be a 33-byte compressed secp256k1 public key in hex"),
+                )
+                return@post
+            }
+            if (target == deps.identity.secp256k1KeyPair.publicKey) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("cannot self-link to your own identity"))
+                return@post
+            }
+            val comment = if (request.label.isBlank()) "self-link" else "self-link: ${request.label}"
+            // Validate the resulting comment fits VeritasGrantCodec's byte limit BEFORE calling
+            // VeritasGrant.create, so an over-long label returns a clean 400 instead of an
+            // uncaught IllegalArgumentException from VeritasGrant's init block (mirrors the
+            // /api/posts byte-count 400 pattern for MAX_POST_BODY_BYTES). Never silently truncate
+            // a user-supplied label.
+            if (comment.toByteArray(Charsets.UTF_8).size > VeritasGrantCodec.MAX_COMMENT_BYTES) {
+                call.respond(HttpStatusCode.BadRequest, ErrorResponse("label is too long"))
+                return@post
+            }
+            val grant =
+                VeritasGrant.create(
+                    truster = deps.identity.secp256k1KeyPair,
+                    target = target,
+                    trustMicros = MAX_TRUST_MICROS,
+                    comment = comment,
+                )
+            deps.veritas.announce(grant)
+            call.respond(SelfLinkResponse(target = target.fingerprint(), trustMicros = MAX_TRUST_MICROS))
+        }
+
         // Serves src/main/resources/static/ (index.html, style.css, app.js) at the site root -
         // e.g. /index.html, /style.css, /app.js. Mapped LAST relative to the /api/* routes above
         // only for readability; Ktor's routing tree dispatches by exact path match, so ordering
@@ -387,4 +508,17 @@ private val MAX_CID_STRING_LENGTH = KarmaVoteCodec.MAX_CID_BYTES * 4
 private fun parseCidOrNull(value: String): Cid? {
     if (value.length > MAX_CID_STRING_LENGTH) return null
     return runCatching { Cid.decode(value) }.getOrNull()
+}
+
+/** Picks the "best" dialable multiaddr for this node to advertise (V0.4 QR/deep-link connect,
+ * see [ConnectUri]): prefers a non-loopback listen address over a `127.0.0.1`/`::1` one, and
+ * always appends `/p2p/<peerId>` so the result is directly usable by [LapisNode.connect]/
+ * [PeerInfo] on the receiving side. Returns `null` only if this node has no listen address at all
+ * (should not happen for a started [LapisNode], but this file never assumes that at a route
+ * boundary - see this function's callers' own null-handling). */
+private fun LapisNode.bestDialableMultiaddr(): Multiaddr? {
+    val addrs = listenAddresses()
+    if (addrs.isEmpty()) return null
+    val nonLoopback = addrs.firstOrNull { !it.toString().contains("/127.0.0.1/") && !it.toString().contains("/::1/") }
+    return (nonLoopback ?: addrs.first()).withP2P(peerId)
 }

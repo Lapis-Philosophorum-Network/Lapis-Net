@@ -22,6 +22,8 @@ import net.lapisphilosophorum.lapisnet.networking.GossipPubSub
 import net.lapisphilosophorum.lapisnet.networking.LapisNode
 import net.lapisphilosophorum.lapisnet.storage.NabuStorage
 import net.lapisphilosophorum.lapisnet.trust.VeritasGossip
+import net.lapisphilosophorum.lapisnet.trust.VeritasGrant
+import net.lapisphilosophorum.lapisnet.trust.VeritasGrantCodec
 import net.lapisphilosophorum.lapisnet.virtus.LtrGossip
 import java.nio.file.Files
 
@@ -440,6 +442,214 @@ class BrowserApiRoutingTest :
                     response.status shouldBe HttpStatusCode.OK
                     val body = json.decodeFromString<PeersResponse>(response.bodyAsText())
                     body.peers shouldBe emptyList()
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("GET /api/connect/info returns a lapisnet:// URI containing the identity's public key hex") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val response = client.get("/api/connect/info")
+                    response.status shouldBe HttpStatusCode.OK
+                    val body = json.decodeFromString<ConnectInfoResponse>(response.bodyAsText())
+                    val expectedHex =
+                        harness.identity.secp256k1KeyPair.publicKey.bytes
+                            .joinToString("") { "%02x".format(it) }
+                    body.publicKeyHex shouldBe expectedHex
+                    body.uri.isNotBlank() shouldBe true
+                    body.uri.startsWith("${ConnectUri.SCHEME}://${ConnectUri.HOST}?") shouldBe true
+                    body.uri.contains(expectedHex) shouldBe true
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("GET /api/connect/qr.svg returns image/svg+xml content type") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val response = client.get("/api/connect/qr.svg")
+                    response.status shouldBe HttpStatusCode.OK
+                    response.contentType()?.withoutParameters() shouldBe ContentType.Image.SVG
+                    response.bodyAsText().startsWith("<svg") shouldBe true
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/connect/uri with a malformed URI returns 400") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val response =
+                        client.post("/api/connect/uri") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(ConnectUriRequest("not a lapisnet uri at all")))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    val body = json.decodeFromString<ErrorResponse>(response.bodyAsText())
+                    body.error.isNotBlank() shouldBe true
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/self-link issues a max-trust grant to the target and it resolves as fully trusted") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val otherDeviceIdentity = DualKeyIdentity.generate()
+                    val announcement =
+                        PostAnnouncement.create(
+                            otherDeviceIdentity.secp256k1KeyPair,
+                            "post from my other device".toByteArray(),
+                        )
+                    harness.posts.announce(announcement)
+
+                    val targetHex =
+                        otherDeviceIdentity.secp256k1KeyPair.publicKey.bytes
+                            .joinToString("") { "%02x".format(it) }
+                    val response =
+                        client.post("/api/self-link") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(SelfLinkRequest(targetHex, label = "phone")))
+                        }
+                    response.status shouldBe HttpStatusCode.OK
+                    val body = json.decodeFromString<SelfLinkResponse>(response.bodyAsText())
+                    body.trustMicros shouldBe 1_000_000
+
+                    val timeline = client.get("/api/timeline")
+                    val entries = json.decodeFromString<List<TimelinePostResponse>>(timeline.bodyAsText())
+                    val entry = entries.single { it.text == "post from my other device" }
+                    entry.credibilityLevel shouldBe CredibilityLevel.RESOLVED.name
+                    entry.credibilityScoreMicros shouldBe 1_000_000
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/self-link to your own identity returns 400") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val ownHex =
+                        harness.identity.secp256k1KeyPair.publicKey.bytes
+                            .joinToString("") { "%02x".format(it) }
+                    val response =
+                        client.post("/api/self-link") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(SelfLinkRequest(ownHex)))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadRequest
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/self-link with malformed hex returns 400") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val response =
+                        client.post("/api/self-link") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(SelfLinkRequest("not-hex-at-all")))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadRequest
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        test("POST /api/self-link with an over-long label returns 400, not a 500") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    val otherDeviceIdentity = DualKeyIdentity.generate()
+                    val targetHex =
+                        otherDeviceIdentity.secp256k1KeyPair.publicKey.bytes
+                            .joinToString("") { "%02x".format(it) }
+                    val tooLongLabel = "a".repeat(VeritasGrantCodec.MAX_COMMENT_BYTES + 1)
+
+                    val response =
+                        client.post("/api/self-link") {
+                            contentType(ContentType.Application.Json)
+                            setBody(json.encodeToString(SelfLinkRequest(targetHex, label = tooLongLabel)))
+                        }
+
+                    response.status shouldBe HttpStatusCode.BadRequest
+                    val body = json.decodeFromString<ErrorResponse>(response.bodyAsText())
+                    body.error.isNotBlank() shouldBe true
+                }
+            } finally {
+                harness.stop()
+            }
+        }
+
+        // Security-critical regression test: proves a self-link from an identity the LOCAL VIEWER
+        // has no trust path to grants the self-linked-to identity NOTHING from the viewer's own
+        // point of view. This is the central Sybil-resistance claim of Part C (see
+        // architecture.adoc "Self-trust linking (V0.4)"): an A->B self-link only extends A's
+        // PRE-EXISTING standing one hop further - it can never manufacture trust a third party
+        // (here, the harness's own local identity) didn't already have a path to.
+        test("a self-link from an untrusted identity grants no credibility to the local viewer") {
+            val harness = TestHarness()
+            try {
+                testApplication {
+                    application { installBrowserApi(harness.deps) }
+
+                    // X and Y are both strangers to the local harness identity - nobody has ever
+                    // granted either of them any trust from the local viewer's point of view.
+                    val identityX = DualKeyIdentity.generate()
+                    val identityY = DualKeyIdentity.generate()
+
+                    // X self-links to Y directly through the real gossip/index path (simulating an
+                    // attacker announcing a self-link, exactly as POST /api/self-link would) -
+                    // never via the local harness identity, and never through the HTTP route
+                    // (which can only ever self-link on behalf of the LOCAL identity).
+                    val attackerSelfLink =
+                        VeritasGrant.create(
+                            truster = identityX.secp256k1KeyPair,
+                            target = identityY.secp256k1KeyPair.publicKey,
+                            trustMicros = 1_000_000,
+                            comment = "self-link: attacker-controlled",
+                        )
+                    harness.veritas.announce(attackerSelfLink)
+
+                    val announcement =
+                        PostAnnouncement.create(identityY.secp256k1KeyPair, "post from Y".toByteArray())
+                    harness.posts.announce(announcement)
+
+                    val timeline = client.get("/api/timeline")
+                    val entries = json.decodeFromString<List<TimelinePostResponse>>(timeline.bodyAsText())
+                    val entry = entries.single { it.text == "post from Y" }
+                    entry.credibilityLevel shouldBe CredibilityLevel.NO_PATH.name
                 }
             } finally {
                 harness.stop()
