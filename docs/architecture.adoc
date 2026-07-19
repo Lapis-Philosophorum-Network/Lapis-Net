@@ -2,20 +2,23 @@
 
 == Status
 
-V0.4 (V0.1-V0.3 milestones complete, V0.4 Genesis-Bootstrap + Identity
-Hardening landed): identity layer (V0.1.2), P2P node bootstrap (V0.1.3),
-DHT + Bitswap content storage via Nabu (V0.1.4), the Veritas trust-edge
-grant data model (V0.1.5), the Veritas transitive trust path-selection
-algorithm (V0.1.6), GossipSub propagation + Nabu persistence of Veritas
-grants (V0.1.7), a multi-node CLI demo proving the full V0.1 stack end to
-end (V0.1.8 — V0.1 milestone complete), the Virtus/LTR data model with
-GossipSub propagation + Nabu persistence (V0.2.1), a Minimal-Browser MVP —
-the first real Lapis Net client (V0.2.2 — V0.2 milestone complete), Karma —
-the third of four scoring dimensions, a Bitcoin-anchored, Veritas-weighted
-one-click "like" (V0.3 — V0.3 milestone complete), and Genesis-Bootstrap +
-Identity Hardening — real bootstrap configuration, QR-code/deep-link key
-exchange, multi-device self-trust-linking, and keystore encryption at rest
-(V0.4, see below) — are implemented. Remaining modules are still
+V0.5 (V0.1-V0.4 milestones complete, V0.5 Madli landed): identity layer
+(V0.1.2), P2P node bootstrap (V0.1.3), DHT + Bitswap content storage via
+Nabu (V0.1.4), the Veritas trust-edge grant data model (V0.1.5), the
+Veritas transitive trust path-selection algorithm (V0.1.6), GossipSub
+propagation + Nabu persistence of Veritas grants (V0.1.7), a multi-node
+CLI demo proving the full V0.1 stack end to end (V0.1.8 — V0.1 milestone
+complete), the Virtus/LTR data model with GossipSub propagation + Nabu
+persistence (V0.2.1), a Minimal-Browser MVP — the first real Lapis Net
+client (V0.2.2 — V0.2 milestone complete), Karma — the third of four
+scoring dimensions, a Bitcoin-anchored, Veritas-weighted one-click "like"
+(V0.3 — V0.3 milestone complete), Genesis-Bootstrap + Identity Hardening —
+real bootstrap configuration, QR-code/deep-link key exchange, multi-device
+self-trust-linking, and keystore encryption at rest (V0.4 — V0.4 milestone
+complete), and Madli — the fourth and final scoring dimension, a
+machine-to-machine node-reputation system rating infrastructure serving
+quality with Veritas-weighted, decay-weighted, weighted-median aggregation
+(V0.5, see below) — are implemented. Remaining modules are still
 skeletons. This document grows as modules gain real implementations.
 
 == Layering
@@ -51,6 +54,10 @@ Virtus, Karma, and Madli are tools for views, not a protocol requirement.
 * `lapis-net-karma` — Karma: signed, gossiped `KarmaVote` "likes" with Bitcoin-chain-anchored
   Sybil resistance (V0.3, see below) — a third sibling scoring dimension to Veritas and Virtus, not
   built on top of either (see Layering above)
+* `lapis-net-madli` — Madli: signed, gossiped `MadliDailyVector` node-infrastructure reputation
+  (V0.5, see below) — the fourth and final scoring dimension, machine-to-machine only, never
+  content or people; deliberately DOES depend on `lapis-net-trust` (a documented exception to the
+  Karma/Virtus sibling-independence rule, see the V0.5 section below)
 * `lapis-net-browser` — Minimal-Browser MVP: a local, loopback-only Ktor HTTP server embedding a
   real node, plus a framework-free HTML/JS timeline UI (V0.2.2, see below), now also wired to Karma
   (V0.3) and to QR/deep-link connect + self-trust-linking (V0.4, see below) — the first real Lapis
@@ -857,6 +864,174 @@ was strengthened with the social-engineering warning described above.
 
 With V0.4 landed, the protocol has moved from a headless, test-fixture-only prototype toward
 something a real (non-test) user could actually run and be reachable through.
+
+== Madli: machine-to-machine node reputation (V0.5)
+
+`lapis-net-madli` is the fourth and final scoring dimension (Layering above). Unlike Veritas
+(who to trust), Karma (what content people like), and Virtus (what content is monetarily boosted),
+Madli rates **nodes as infrastructure** — Bitswap/DHT serving quality — and is never shown to a
+human participant or attached to any content or identity's social standing. Its data model,
+`MadliDailyVector`, is a signed, bilateral, per-day observation cast by one Lapis identity
+(`observer`) about one libp2p peer's (`observedPeer`, a `PeerId`, not a `Secp256k1PublicKey` —
+Madli rates infrastructure peers, not identities) serving quality on a given `epochDay`, carrying
+five fixed-point metrics: Reachability, Delivery-Integrity, and Routing-Helpfulness (micros
+fractions, `0..1_000_000`), plus raw Bandwidth (median bytes/sec) and Latency (median RTT millis).
+All five are fixed-point integers, never `Double`, for the same reason `VeritasGrant.trustMicros`
+documents — this value is embedded in a signed, cross-node-compared structure.
+
+**No `nonce` field — deliberately the opposite of `KarmaVote`/`LtrRecord`.** Those are
+accumulating models (every vote/record is kept, never resolved to a winner), so a nonce is needed
+to keep otherwise-identical entries content-id-distinct. Madli is latest-wins-per-`(observer,
+observedPeer, epochDay)`, closer to `VeritasGrant`'s latest-wins-per-(truster, target) model: a day
+has exactly one summary per observer for one observed peer, and a genuine correction naturally
+produces a different content-id (different metrics), handled by the index's per-tuple replace
+rule below rather than by a nonce keeping duplicates alive side by side.
+
+**The wave's central security decision — two anti-flooding/anti-backdating invariants in
+`MadliVectorIndex`, mirroring Karma's per-`(voter, target)` replace fix but generalized to a
+day-keyed tuple.** Invariant A: at most one tracked vector per `(observer, observedPeer, epochDay)`
+— a new vector for an already-tracked exact tuple replaces the old one (most-recent-arrival wins),
+closing "one observer floods many vectors about one peer for the same day". Invariant B — the
+genuinely new defense this wave adds, with no Karma/Virtus precedent: at most
+`MAX_TRACKED_DAYS_PER_OBSERVER_PEER` (128) distinct-day vectors per `(observer, observedPeer)`
+pair, evicting the smallest `epochDay` once exceeded (tie-broken by lexicographically-smallest
+content-id for deterministic convergence across honest nodes). Without invariant B, invariant A
+alone would not stop an observer from publishing hundreds of distinct-`epochDay` vectors about one
+peer — each a distinct tuple, so invariant A never catches it — and stacking decay-weighted
+contributions in aggregation indefinitely; this is the anti-backdating defense. Both invariants are
+enforced by keeping THREE secondary indices (`vectorsByObservedPeer`, `vectorsByObserverPeer`,
+`currentByObserverPeerDay`) in lockstep on every eviction and replacement — the exact `KarmaVoteIndex`
+lesson about a partial-cleanup bug silently corrupting downstream aggregation input.
+
+**Validator determinism — `MadliGossip.onGossipMessage` makes zero clock/network calls, same
+central decision `KarmaGossip`/`LtrGossip` already establish.** `epochDay` is deliberately NOT
+range-checked against wall-clock time anywhere in the codec or the gossip validator — doing so
+would make mesh behavior depend on wall-clock skew between peers, breaking the "same
+structural+signature rules applied to the same bytes always yield the same accept/reject decision
+on every honest node" invariant. Backdating/future-dating is instead defused at READ time
+(`MadliDecayCalculator`'s future-clamp, identical to `LtrWeightCalculator`'s load-bearing
+`coerceAtLeast(0.0)`) and bounded by invariant B above.
+
+**Five independently-configurable decay half-lives (`MadliHalfLives`), generalizing
+`LtrWeightCalculator`'s single-half-life pattern.** Reachability/Latency default to a 7-day
+half-life (network conditions change fast); Bandwidth/Routing-Helpfulness to 30 days; Delivery-
+Integrity to 90 days (a track record of not corrupting/dropping data is a durable signal).
+Each metric in `MadliAggregator.aggregate` is decayed by its OWN half-life, so a single vector
+contributes a different weight to each of the five output fields.
+
+**Veritas-weighted, weighted-MEDIAN aggregation — the module's headline deliverable, and a
+deliberate, documented deviation from the Karma/Virtus "no sibling trust dependency" rule.**
+Karma/Virtus defer Veritas-weighting to their application-layer consumer (`lapis-net-browser`'s
+`KarmaScoring`); Madli has no application-layer consumer this wave (it is machine-to-machine
+infrastructure, "nicht für menschliche Teilnehmer sichtbar"), so its Veritas-weighted aggregation —
+the subject of the mandatory Sybil-resistance simulation below — is hosted directly in
+`lapis-net-madli`. To keep the security-critical core decoupled and independently testable, the
+aggregation core (`MadliAggregator.aggregate`) is written against an injected
+`observerWeight: (Secp256k1PublicKey) -> Double` function, exactly mirroring how
+`KarmaWeightCalculator` takes `votesByVoter` as an injected function — only one small adapter
+function, `MadliAggregator.veritasObserverWeight`, references `TrustPathFinder`/`TrustGraph`.
+`lapis-net-madli`'s `build.gradle.kts` documents this deviation in its header comment. Three
+manipulation defenses combine in `aggregate`: (1) Veritas-weighting — each observer's contribution
+is scaled by the consumer's own Veritas score of that observer, so a Sybil cluster with no external
+Veritas path gets weight `0.0` and contributes nothing; (2) weighted MEDIAN, not mean — if 90% of
+(Veritas-weighted) observers report a peer as slow and 10% report it as fast, the weighted median
+follows the 90% majority, limiting a peer's ability to selectively serve a small minority of
+observers well and pull the aggregate upward the way a mean would; (3) **one representative vector
+per observer per metric** — `aggregate` groups its input by `observer` and, independently per
+metric (own half-life), feeds the weighted median only the single highest-decayed-weight vector
+from each observer, never a sum of all of that observer's tracked vectors. See below for why this
+third defense is required, not optional.
+
+**Invariant B alone does not close the backdated-vector-flooding gap — the aggregation-level fix
+that actually does.** `MadliVectorIndex`'s invariant B (above) caps a single observer at
+`MAX_TRACKED_DAYS_PER_OBSERVER_PEER` (128) distinct-day vectors per observed peer, and
+`MadliGossip.onGossipMessage`'s validator deliberately never range-checks `epochDay` against
+wall-clock time (the validator-determinism decision above) — so an attacker who has acquired even a
+modest, non-majority amount of Veritas trust can fabricate and gossip all 128 backdated vectors
+about a target peer in a single burst, no real elapsed time required. Before this wave's security
+fix, `MadliAggregator.aggregate` mapped every tracked vector to an independent
+`(value, decayed weight)` sample with no per-observer grouping, so one observer's total influence on
+the aggregate scaled with how many distinct-day vectors they had stacked, not with how much the
+consumer actually trusted them as one entity — multiplying their effective weight by roughly
+`sum_{d=0}^{127} 0.5^(d / halfLife)`: ~10.6x for the 7-day half-life (Reachability/Latency), ~41.5x
+for 30 days (Bandwidth/Routing-Helpfulness), ~81.7x for 90 days (Delivery-Integrity). That let a
+single NON-majority observer outweigh 9+ genuinely independent honest observers who each published
+only their one truthful vector for today, defeating both the Veritas-weighting and weighted-median
+defenses' "one observer's report counts once, scaled by trust" reasoning. The fix — defense 3 above
+— closes this structurally: for each metric, each observer contributes at most their own single
+highest-decayed-weight (freshest) vector, so vector VOLUME can never multiply an observer's
+influence, no matter how many distinct-day vectors invariant B still lets them track. This is
+distinct from, and does not weaken, `MadliSybilResistanceSimulationTest` Scenario 3b's accepted
+residual (a trusted headcount MAJORITY of DISTINCT observers, one vector each, still wins the
+median) — that scenario is about genuine trust majority, this fix is about one observer manufacturing
+disproportionate influence via publishing volume. See `MadliAggregatorTest`'s dedicated
+backdated-flooding regression test (128 fabricated vectors from one attacker bounded to one vote,
+outweighed by 9 honest single-vector observers) and `MadliAggregator.aggregate`'s KDoc for the full
+reasoning.
+
+**Weighted-median tie-break is symmetric at an exact 50/50 weight split, not low-biased.** The
+underlying `weightedMedianLong` helper (read-time `Double` math only — never part of any
+signed/cross-node-compared structure) originally returned the lower of two values whenever
+cumulative weight landed exactly on the halfway threshold, letting an attacker holding exactly half
+the effective weight (not a majority) force the aggregate toward their own fabricated low report,
+since they control what they report while they cannot control the honest side's value. It now
+detects an exact tie (within a `1e-9` epsilon) and returns the midpoint of the two boundary values
+instead — the standard even-weight-split median convention (e.g. two equal-weight observers
+reporting 100 and 300 resolve to 200, not 100) — with a dedicated regression test.
+
+**The Sybil-resistance simulation — resolving the vault note's one explicitly-unresolved item.**
+`MadliSybilResistanceSimulationTest` feeds fabricated daily vectors through the REAL
+`MadliAggregator.aggregate` + REAL `MadliAggregator.veritasObserverWeight` + REAL
+`TrustGraph`/`TrustPathFinder` (not a mock of aggregation), across three scenarios: (1) a 20-node
+Sybil cluster that mutually vouches at maximum trust but has no path from the consumer has
+near-zero effect on the aggregate — proving the Veritas-weighting defense; (2) a peer that
+selectively serves 1-of-10 trusted observers well and the other 9 badly is scored by the
+9-observer badly-served majority, not pulled up by the outlier — proving the weighted-median
+defense; (3a) a single trusted observer lying is defeated by a trusted honest majority; (3b) a
+trusted MAJORITY that lies still wins the median — an explicitly asserted, DOCUMENTED RESIDUAL
+matching the vault note's own acknowledgment that only the network's generic reputation-burning
+mechanism (not this module's aggregation math) defends against a trusted majority turning
+dishonest. Asserting 3b explicitly, rather than leaving it an unstated gap, mirrors V0.4's
+self-link Sybil-resistance test discipline: the boundary is now a tested, documented property.
+
+**Bitswap-modulation hooks exist and are pure/unit-tested, but are NOT wired into a live fetch this
+wave — an honest, deliberate scope cut, mirroring V0.1.4's own honest documentation of what is
+verified-usable versus documented-broken.** `MadliRoutingPolicy.orderPeers` (peer-set ordering by
+`routingScore`, a monotonic function of the five metrics with a Bitswap-consumable
+`NabuStorage.get(cid, peers = orderedSet)` shape in mind) and `MadliReplicationPolicy` (a pluggable
+local replication hook, default `NEVER`, plus an `underServedImportant` reference implementation)
+are both pure, local, and thoroughly unit-tested against synthetic peer sets and signals. They are
+not exercised end-to-end because: (a) `NabuStorage.findProviders()` does not work end-to-end in
+this codebase (a pre-existing V0.1.4 limitation, see that section above), so there is no live
+provider set to order in a real fetch; (b) Nabu exposes no Bitswap responder-side prioritization
+hook ("serve high-Madli requesters faster" is not wireable at all without patching Nabu — out of
+scope); (c) no production consumer wires `orderPeers` into a `get(cid, peers=...)` call this wave.
+`orderPeers` deprioritizes a peer with no Madli history to sort last (the vault's bootstrap
+deprioritization), with a deterministic ascending-peerId-bytes tie-break.
+
+**Incentive model — a no-code doc note.** This wave builds the scoring/observation/aggregation
+engine only; it does not implement any protocol-level reward or penalty tied to Madli standing
+(e.g. preferential replication slots, fee discounts). That remains future scope.
+
+**Known, deliberately accepted gaps:**
+
+* **Bitswap modulation is structurally ready, not end-to-end exercised** — see above; this mirrors
+  V0.1.4's Storage section precedent for "verified-usable vs. documented-broken" honesty.
+* **No production consumer** — Madli is not wired into `lapis-net-browser`; there is no UI surface
+  for Madli this wave (by design — it is machine-to-machine, not human-facing).
+* **Local observation collection is out of scope this wave.** The module builds the
+  published-vector pipeline and consumes vectors; it does not instrument live Bitswap/DHT
+  interactions to produce real metric measurements. Vectors are constructed by callers/tests.
+* **`observationCount` is advisory/self-declared** — not part of any anti-Sybil guarantee, exactly
+  like a `KarmaVote`'s `timeAnchor` claim; the Veritas-weighting is the actual guarantee.
+* **Incentive model is a no-code doc note** — see above.
+* **Half-lives are per-view configurable** via `MadliHalfLives`, but there is no persistence/UI for
+  operator configuration this wave (defaults only).
+* **Scenario 3b's trusted-majority-lies residual** — see above; a real, accepted, and now
+  explicitly tested boundary of this module's manipulation resistance.
+
+With V0.5 landed, all four of the fach-spec's scoring dimensions — Veritas, Virtus, Karma, and
+Madli — are now implemented.
 
 == Diagrams
 

@@ -134,3 +134,46 @@ atomic v1-to-v2 migration.
 
 V0.4 is implemented (see `docs/architecture.adoc`'s "Genesis-Bootstrap +
 Identity Hardening (V0.4)" section). **The V0.4 milestone is complete.**
+
+== V0.5 — Madli
+
+Target: the fourth and final scoring dimension — Madli, a machine-to-machine
+node-reputation system rating nodes as infrastructure (Bitswap/DHT serving
+quality), never content or people, with Veritas-weighted, decay-weighted,
+weighted-median aggregation resistant to Sybil clusters and selective
+service.
+
+[cols="1,3"]
+|===
+| Wave | Content
+
+| V0.5
+| `lapis-net-madli`: `MadliDailyVector` data model (five fixed-point
+metrics — Reachability, Bandwidth, Latency, Delivery-Integrity,
+Routing-Helpfulness — signed per `(observer, observedPeer, epochDay)`,
+no `nonce`, latest-wins per tuple); `MadliVectorIndex` with two
+anti-flooding/anti-backdating invariants (one tracked vector per exact
+tuple; a capped number of distinct days per `(observer, observedPeer)`
+pair); GossipSub propagation with zero clock/network calls in the
+validation path (mirroring `KarmaGossip`/`LtrGossip`'s precedent);
+`MadliDecayCalculator`'s five independently-configurable half-lives;
+`MadliAggregator`'s Veritas-weighted weighted-median aggregation (a
+deliberate, documented exception to the Karma/Virtus "no sibling trust
+dependency" rule, since Madli has no application-layer consumer this
+wave); `MadliRoutingPolicy`/`MadliReplicationPolicy` — pure,
+unit-tested Bitswap-modulation hooks, structurally ready but not wired
+into a live fetch this wave (honest scope cut, mirroring V0.1.4's own
+provider-discovery limitation); and `MadliSybilResistanceSimulationTest`
+— the mandatory adversarial harness resolving the vault note's one
+explicitly-unresolved item, proving the Veritas-weighting and
+weighted-median defenses hold against a real `TrustGraph`/
+`TrustPathFinder`, and explicitly documenting the one accepted residual
+(a trusted majority that lies still wins the median).
+|===
+
+=== Progress
+
+V0.5 is implemented (see `docs/architecture.adoc`'s "Madli: machine-to-
+machine node reputation (V0.5)" section). **The V0.5 milestone is
+complete.** All four of the fach-spec's scoring dimensions (Veritas,
+Virtus, Karma, Madli) are now implemented.
