@@ -4,7 +4,7 @@
 
 [source,bash]
 ----
-git clone https://github.com/Lapis-Philosophorum-Network/Lapis-Net.git
+git clone https://github.com/lapisproject-dev/Lapis-Net.git
 cd Lapis-Net
 ./gradlew clean check
 ----
