@@ -1,5 +1,8 @@
 = Lapis Net
 
+image:https://github.com/lapisproject-dev/Lapis-Net/actions/workflows/ci.yml/badge.svg?branch=master[CI,link=https://github.com/lapisproject-dev/Lapis-Net/actions/workflows/ci.yml]
+image:https://img.shields.io/github/license/lapisproject-dev/Lapis-Net[License,link=LICENSE]
+
 image::docs/images/ln-banner.png[Lapis Net,link=https://github.com/lapisproject-dev/Lapis-Net]
 
 Lapis Net is a fully decentralized peer-to-peer social network protocol on the
